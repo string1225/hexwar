@@ -72,7 +72,7 @@ export class GameApp {
     this.render();
   }
   endTurn() {
-    if (this.busy || this.state.phase !== 'playing') return;
+    if (this.busy || this.cloudBusy || this.state.phase !== 'playing') return;
     this.target = null;
     if (this.command({ type: 'END_TURN' })) this.runAI();
   }
@@ -307,9 +307,13 @@ export class GameApp {
     box(ctx, x, y, w, h, C.panel, C.border);
     const pad = compact ? 14 : 18, ix = x + pad, iw = w - 2 * pad;
     const tabY = y + (compact ? 10 : 15);
-    this.button('tab-order', '行军指令', ix, tabY, (iw - 6) / 2, 31, () => { this.tab = 'forces'; }, this.tab === 'forces' ? 'active' : 'normal');
-    this.button('tab-routes', `运输路线${this.state.routes.length ? ` · ${this.state.routes.length}` : ''}`, ix + (iw + 6) / 2, tabY, (iw - 6) / 2, 31, () => { this.tab = 'routes'; }, this.tab === 'routes' ? 'active' : 'normal');
-    if (this.tab === 'routes') {
+    const cloud = !!this.p.cloud, tw = (iw - (cloud ? 12 : 6)) / (cloud ? 3 : 2);
+    this.button('tab-order', '行军指令', ix, tabY, tw, 31, () => { this.tab = 'forces'; }, this.tab === 'forces' ? 'active' : 'normal');
+    this.button('tab-routes', `${cloud ? '运输' : '运输路线'}${this.state.routes.length ? ` · ${this.state.routes.length}` : ''}`, ix + tw + 6, tabY, tw, 31, () => { this.tab = 'routes'; }, this.tab === 'routes' ? 'active' : 'normal');
+    if (cloud) this.button('tab-cloud', '云存档', ix + 2 * (tw + 6), tabY, tw, 31, () => { this.tab = 'cloud'; this.readCloud(); }, this.tab === 'cloud' ? 'active' : 'normal');
+    if (this.tab === 'cloud') {
+      this.cloudPanel(ix, tabY + 49, iw, compact);
+    } else if (this.tab === 'routes') {
       this.routesPanel(ix, tabY + 48, iw, h - (compact ? 115 : 142), compact);
     } else if (compact) {
       const rowY = y + 62;
@@ -371,7 +375,49 @@ export class GameApp {
     }, 'primary', disabled);
   }
   endButton(x, y, w, h) {
-    this.button('end-turn', this.busy ? '敌方行动中…' : '结束回合  →', x, y, w, h, () => this.endTurn(), 'normal', this.busy || this.state.phase !== 'playing');
+    this.button('end-turn', this.busy ? '敌方行动中…' : '结束回合  →', x, y, w, h, () => this.endTurn(), 'normal', this.busy || this.cloudBusy || this.state.phase !== 'playing');
+  }
+  async readCloud() {
+    if (!this.p.cloud || this.cloudBusy) return;
+    this.cloudBusy = true; this.cloudError = ''; this.render();
+    try { this.cloudRecord = await this.p.cloud.read(); }
+    catch (error) { this.cloudError = error.message; this.cloudRecord = null; }
+    finally { this.cloudBusy = false; this.render(); }
+  }
+  async writeCloud() {
+    if (this.busy || this.cloudBusy || !this.cloudRecord) return;
+    this.cloudBusy = true; this.render();
+    const state = JSON.parse(serialize(this.state));
+    try {
+      const result = await this.p.cloud.write(state, this.cloudRecord.revision);
+      this.cloudRecord = { ...result, state }; this.cloudError = ''; this.notify('当前战役已备份到云端。');
+    } catch (error) { this.cloudError = error.message; this.cloudRecord = null; }
+    finally { this.cloudBusy = false; this.render(); }
+  }
+  restoreCloud() {
+    if (this.busy || this.cloudBusy) return;
+    const saved = restore(this.cloudRecord?.state);
+    if (!saved) { this.notify('云端暂无有效存档。'); return; }
+    this.generation++; this.state = saved; this.busy = false;
+    this.zoom = 1; this.pan = { x: 0, y: 0 }; this.transport = false; this.tab = 'forces';
+    this.selectHome(); this.save();
+    if (saved.phase === 'finished') this.modal = 'result';
+    this.notify('云端战役已读取，本地存档已更新。');
+    if (saved.current !== 0 && saved.phase === 'playing') this.runAI();
+  }
+  cloudPanel(x, y, w, compact) {
+    const ctx = this.ctx, record = this.cloudRecord;
+    text(ctx, this.cloudBusy ? '正在连接云存档…' : record?.state ? `云端战役 · 第 ${record.state.round} 轮` : record ? '云端暂无备份' : '微信云存档', x, y, 12, C.mint, '600');
+    if (this.cloudError) {
+      wrap(ctx, this.cloudError, x, y + 25, w, 11, C.muted, 18);
+      this.button('cloud-retry', '重新连接', x, y + (compact ? 79 : 110), w, 34, () => this.readCloud(), 'normal', this.cloudBusy);
+      return;
+    }
+    wrap(ctx, '备份会更新云端；读取会替换本机战役。', x, y + 26, w, 10, C.muted, 18);
+    const by = y + (compact ? 62 : 90), bw = (w - 8) / 2;
+    this.button('cloud-backup', '备份当前', x, by, bw, 34, () => this.writeCloud(), 'primary', this.busy || this.cloudBusy || !record);
+    this.button('cloud-restore', '读取云端', x + bw + 8, by, bw, 34, () => this.restoreCloud(), 'normal', this.busy || this.cloudBusy || !record?.state);
+    if (!compact) wrap(ctx, '本机每步自动保存。云端由你手动备份，使用当前微信账号识别；断网不影响继续游戏。', x, by + 65, w, 11, C.muted, 21);
   }
   routesPanel(x, y, w, h, compact) {
     const ctx = this.ctx, routes = this.state.routes.filter(r => r.owner === 0);

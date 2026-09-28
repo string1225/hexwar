@@ -1,9 +1,11 @@
 import { GameApp } from '../ui/app.js';
+import { createWechatCloud } from './cloud.js';
 
 const canvas = wx.createCanvas();
 const STORAGE_KEY = 'hexwar.save.v1';
 const platform = {
   canvas,
+  cloud: typeof wx.login === 'function' && typeof wx.request === 'function' ? createWechatCloud(wx) : null,
   size() {
     const info = typeof wx.getWindowInfo === 'function' ? wx.getWindowInfo() : wx.getSystemInfoSync();
     const safe = info.safeArea;

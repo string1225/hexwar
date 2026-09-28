@@ -8,10 +8,18 @@
     "dev": "node scripts/dev.mjs",
     "build": "node scripts/build.mjs",
     "test": "node --test tests/*.test.js",
-    "check": "npm run test && npm run build"
+    "check": "npm run test && npm run build",
+    "wechat:check": "node scripts/wechat-ci.cjs check",
+    "wechat:preview": "npm run build && node scripts/wechat-via-ssh.mjs preview",
+    "wechat:upload": "npm run build && node scripts/wechat-via-ssh.mjs upload",
+    "server": "node server/index.js",
+    "deploy": "npm run build && node scripts/deploy.mjs"
   },
   "devDependencies": {
-    "esbuild": "^0.25.0"
+    "esbuild": "^0.25.0",
+    "miniprogram-ci": "2.1.31"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=22.13"
+  }
 }

@@ -1,0 +1,25 @@
+[Unit]
+Description=HEXWAR WeChat login and cloud saves
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hexwar
+Group=hexwar
+WorkingDirectory=/opt/hexwar/current
+ExecStart=/usr/bin/node server/index.js
+EnvironmentFile=/etc/hexwar/server.env
+StateDirectory=hexwar
+StateDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/hexwar
+
+[Install]
+WantedBy=multi-user.target

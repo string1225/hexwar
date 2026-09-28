@@ -2,7 +2,7 @@
   "description": "六边形战争 — 单人回合制策略小游戏",
   "compileType": "game",
   "miniprogramRoot": "dist/wechat/",
-  "appid": "touristappid",
+  "appid": "wxacd4dbd0f3d625e8",
   "projectname": "hexwar",
   "setting": {
     "es6": true,

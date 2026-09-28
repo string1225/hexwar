@@ -4,3 +4,11 @@ artifacts/
 project.private.config.json
 .DS_Store
 *.log
+wechat-ci.local.json
+private.*.key
+.env
+.env.*
+!.env.example
+.secrets/
+*.sqlite
+*.sqlite-*

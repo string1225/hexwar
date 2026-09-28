@@ -1,0 +1,5 @@
+{
+  "privateKeyPath": "C:/path/to/private.wxacd4dbd0f3d625e8.key",
+  "robot": 1,
+  "qrcodeOutputDest": "artifacts/wechat-preview.jpg"
+}

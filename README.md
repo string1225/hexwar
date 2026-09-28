@@ -4,7 +4,7 @@
 
 ## 快速开始
 
-需要 Node.js 20 或更高版本。
+需要 Node.js 22.13 或更高版本（后端使用内置 SQLite）。
 
 ```sh
 npm install
@@ -28,12 +28,33 @@ npm run check # 测试 + 构建
 
 1. 运行 `npm install` 和 `npm run build`。
 2. 在微信开发者工具中新建 / 导入**小游戏**项目，选择本仓库根目录；根目录 `project.config.json` 已配置 `compileType: game` 和 `miniprogramRoot: dist/wechat/`。
-3. 配置中的 `touristappid` 仅用于开发工具游客调试。真机预览、体验版和发布需要你自己的微信小游戏 AppID，请在开发者工具中填入。
+3. 项目已绑定小游戏 AppID `wxacd4dbd0f3d625e8`。使用有权限的微信账号登录开发者工具进行模拟和真机预览。
 4. 每次修改源码后重新运行 `npm run build`，再编译。
 
-没有接入登录、云服务、广告、付费或数据分析。游戏进度只存于当前设备；微信和浏览器的存档各自独立。
+每步自动保存本机进度。微信版另有「云存档」页签：微信登录后可手动备份当前战役或读取云端战役；读取会替换本机进度。打开云存档不会自动覆盖任何进度，断网仍可正常玩。浏览器版保持独立本地存档。未接入广告、付费、数据分析或多人对战。
 
 微信客户端使用 `wx.createCanvas`、`wx.createImage`、触摸事件及本地存储；包含像素比、顶部胶囊区域和底部安全区适配。平台配置参考 [微信官方小游戏示例](https://github.com/wechat-miniprogram/minigame-demo)。实际真机表现仍须在微信开发者工具及 iOS / Android 微信内验收。
+
+## 微信 CI 预览和上传
+
+复制 `wechat-ci.example.json` 为被 Git 忽略的 `wechat-ci.local.json`，填入上传密钥的本机绝对路径，也可使用 `WECHAT_PRIVATE_KEY_PATH` 环境变量。
+
+```sh
+npm run wechat:check    # 校验 AppID、RSA 上传密钥和机器人编号
+npm run wechat:preview  # 构建，生成 artifacts/wechat-preview.jpg 扫码预览
+npm run wechat:upload   # 构建，上传微信开发版本；不自动提审或正式发布
+```
+
+上述流程通过 `miniprogram-ci` 调用微信平台，不依赖开发工具 CLI 服务端口。预览和上传经 SSH 使用 139 的网络出口，上传密钥留在本机；需在此 AppID 的「小程序代码上传」IP 白名单中加入 `139.224.12.141`。这与服务器域名白名单是两项独立设置。App Secret 仅用于服务器。
+
+## 139 服务器
+
+- 在线试玩：<https://www.sunny-string.cn/wechat/game/hexwar/>
+- API：`https://www.sunny-string.cn/wechat/game/hexwar/api`
+- 健康检查：<https://www.sunny-string.cn/wechat/game/hexwar/api/health>
+- 服务器：`139.224.12.141`，SSH 别名 `aliyun-139`。
+
+`npm run deploy` 构建并部署到上述服务器。后端提供微信登录、独立账号的 SQLite 云存档及版本冲突保护。详细配置、接口和回滚见 [部署说明](docs/DEPLOYMENT.md)。
 
 ## 怎么玩
 
@@ -56,6 +77,8 @@ npm run check # 测试 + 构建
 src/core/         平台无关的确定性规则引擎、六边形坐标
 src/ui/           共享 Canvas 界面、输入处理、战役控制
 src/platform/     浏览器与微信生命周期 / 图片 / 存储 / 输入适配
+server/           微信登录与云存档 HTTP API（Node 内置 SQLite）
+deploy/           Nginx 路由、systemd 服务与部署脚本
 assets/           原创 Logo
 scripts/          本地开发服务器、双端构建
 tests/            规则、回归、模拟对局及平台契约测试
@@ -68,7 +91,7 @@ docs/             方案评估、视觉设计说明
 
 自动化测试覆盖地图连通性与出生分布、战斗概率与伤亡、回合轮转、自动运输、胜负、存档校验和长局状态不变量；共享界面与微信适配还通过模拟平台测试。浏览器需进行真实点击、手机 / 桌面布局、刷新续战的人工验收。
 
-微信 API 模拟测试不能替代微信开发者工具或真机测试。没有真实 AppID 或微信开发者工具时，不能声称已完成真机验收或微信发布。多人实时联机属于后续阶段，当前不提供房间或匹配入口。
+微信 API 模拟测试及 CI 预览生成不能替代微信开发者工具或真机测试。多人实时联机属于后续阶段，当前不提供房间或匹配入口。
 
 ## License
 

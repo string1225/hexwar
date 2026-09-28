@@ -89,6 +89,24 @@ test('winning through the UI shows a result, persists it and allows another camp
   click(resumed, 'play-again'); assert.equal(resumed.modal, 'setup');
   click(resumed, 'start-game'); assert.equal(resumed.state.phase, 'playing');
 });
+test('cloud actions are explicit, validate downloaded saves and preserve local play on errors', async () => {
+  const p = platform(), remote = createGame({ size: 'small', enemies: 1, seed: 'cloud-restore' });
+  let writes = 0;
+  p.cloud = {
+    read: async () => ({ revision: 4, state: remote }),
+    write: async (_state, revision) => { writes++; assert.equal(revision, 4); return { revision: 5, savedAt: Date.now() }; },
+  };
+  const app = new GameApp(p); app.newGame(); const local = serialize(app.state);
+  app.tab = 'cloud'; await app.readCloud();
+  assert.equal(serialize(app.state), local); // Opening the tab never overwrites local progress.
+  app.restoreCloud(); assert.equal(app.state.config.seed, 'cloud-restore');
+  await app.writeCloud(); assert.equal(writes, 1); assert.equal(app.cloudRecord.revision, 5);
+  for (const b of app.buttons) assert.ok(b.x >= 0 && b.x + b.w <= 390 && b.y + b.h <= 844);
+  p.cloud.read = async () => { throw new Error('offline'); };
+  const before = serialize(app.state); await app.readCloud();
+  assert.equal(serialize(app.state), before); assert.equal(app.cloudBusy, false); assert.equal(app.cloudError, 'offline');
+  clearTimeout(app.toastTimer);
+});
 test('reloading an AI turn resumes once, grows once, and returns to player', async () => {
   let state = createGame({ size: 'small', enemies: 1, seed: 'resume' });
   state = applyCommand(state, { type: 'END_TURN', actor: 0 });
