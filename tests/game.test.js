@@ -210,7 +210,7 @@ test('editing and cancelling planned attacks never changes the battlefield or ra
   assert.equal(state.orders.length, 0); assert.equal(serialize(state.cells), initial); assert.equal(state.rng, rng);
 });
 
-test('all factions lock plans before any movement; once and repeat orders share proportional budgets', () => {
+test('all factions lock plans before movement; once orders reserve troops before repeating orders', () => {
   let { state, a, b } = scenario();
   const c = neighbors(a, state.cells).find(cell => cell.id !== b.id && cell.owner === null);
   b.owner = c.owner = 0; a.troops = 18; b.troops = c.troops = 1;
@@ -224,7 +224,7 @@ test('all factions lock plans before any movement; once and repeat orders share 
   assert.equal(serialize(state.cells), board);
   state = command(state, { type: 'END_TURN' });
   assert.equal(state.current, 0); assert.equal(state.cells[a.id].troops, 2);
-  assert.deepEqual([state.cells[b.id].troops, state.cells[c.id].troops].sort((a, b) => a - b), [10, 11]);
+  assert.equal(state.cells[b.id].troops, 12); assert.equal(state.cells[c.id].troops, 9);
   assert.equal(state.orders.length, 1); assert.equal(state.orders[0].frequency, 'repeat');
   const previous = state.cells[c.id].troops;
   state = finishRound(state);

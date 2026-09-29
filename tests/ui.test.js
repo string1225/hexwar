@@ -116,6 +116,31 @@ test('update is disabled until values or frequency differ, and reverting edits d
   click(app, 'cancel-order'); assert.ok(!disabled());
 });
 
+test('manual sliders and shortcuts respect shared budget, editing credits, and zero remaining troops', () => {
+  const state = createGame({ size: 'small', enemies: 1, seed: 'ui-budget' });
+  const home = Object.values(state.cells).find(c => c.owner === 0); home.troops = 10;
+  const [a, b, c] = neighbors(home, state.cells).filter(c => c.owner === null);
+  for (const target of [a, b, c]) { target.owner = 0; target.troops = 1; }
+  const app = new GameApp(platform(390, 844, serialize(state)));
+  app.chooseCell(a.id); app.amount = 6; app.render(); click(app, 'dispatch');
+  app.chooseCell(home.id); app.chooseCell(b.id);
+  click(app, 'amount-2'); assert.equal(app.amount, 3);
+  assert.ok(app.buttons.find(b => b.id === 'amount-plus').disabled);
+  click(app, 'amount-1'); assert.equal(app.amount, 1);
+  click(app, 'amount-2'); click(app, 'dispatch');
+  app.chooseCell(home.id); app.chooseCell(c.id); assert.equal(app.amount, 0);
+  for (const id of ['amount-minus', 'amount-plus', 'amount-0', 'amount-1', 'amount-2', 'dispatch']) assert.ok(app.buttons.find(b => b.id === id).disabled, id);
+  assert.ok(app.ctx.drawn.includes('本回合额度已用完'));
+  click(app, 'frequency-repeat'); assert.equal(app.amount, 1); click(app, 'dispatch');
+  click(app, 'orders'); click(app, `edit-${home.id}>${a.id}`);
+  assert.equal(app.amount, 6); assert.ok(app.buttons.find(b => b.id === 'dispatch').disabled);
+  assert.ok(app.buttons.find(b => b.id === 'amount-plus').disabled);
+  click(app, 'amount-minus'); click(app, 'dispatch');
+  app.chooseCell(home.id); app.chooseCell(c.id); click(app, 'frequency-once');
+  assert.equal(app.amount, 1); click(app, 'dispatch');
+  assert.equal(app.state.orders.filter(o => o.frequency === 'once').reduce((sum, o) => sum + o.amount, 0), 9);
+});
+
 test('after setting or updating a plan the next cell click selects it, including adjacent and hostile cells', () => {
   const state = createGame({ size: 'small', enemies: 1, seed: 'next-selection' });
   const home = Object.values(state.cells).find(c => c.owner === 0);

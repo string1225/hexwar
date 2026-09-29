@@ -35,7 +35,7 @@ test('two converging armies have exactly the same battle outcome as their combin
 test('reversing order entry and cell traversal preserves all results, random state and logs', () => {
   const state = board(87);
   Object.assign(state.cells['0,-1'], { owner: 0, troops: 12 });
-  const orders = { 0: [plan('-1,0', '0,0', 14), plan('-1,0', '-1,1', 12), plan('0,-1', '0,0', 8)], 1: [plan('1,0', '0,0', 12)], 2: [plan('0,2', '0,1', 10)] };
+  const orders = { 0: [plan('-1,0', '0,0', 14), plan('-1,0', '-1,1', 5), plan('0,-1', '0,0', 8)], 1: [plan('1,0', '0,0', 12)], 2: [plan('0,2', '0,1', 10)] };
   const reversed = cloneState(state); reversed.cells = Object.fromEntries(Object.entries(reversed.cells).reverse());
   const expected = playRound(state, orders);
   const actual = playRound(reversed, Object.fromEntries(Object.entries(orders).map(([owner, list]) => [owner, [...list].reverse()])));

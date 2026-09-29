@@ -1,6 +1,6 @@
 import { adjacent, cellId, distance, neighbors } from './hex.js';
 
-export const SAVE_VERSION = 4;
+export const SAVE_VERSION = 5;
 export const SIZES = {
   small: { label: '小型', radius: 3, cells: 37, duration: '轻快交锋' },
   medium: { label: '中型', radius: 5, cells: 91, duration: '经典战役' },
@@ -70,6 +70,15 @@ export const BATTLE_EXPONENT = Math.log(19) / Math.log(3);
 export const winChance = (attack, defense) => attack > 0 ? 1 / (1 + (defense / attack) ** BATTLE_EXPONENT) : 0;
 export const cloneState = state => JSON.parse(JSON.stringify(state));
 
+// Editing a direction replaces its reservation; recurring orders never reserve
+// this turn's manual budget, and incoming troops cannot be spent in advance.
+export function availableTroops(state, from, excludeTo = null) {
+  const source = state.cells[from];
+  if (!source) return 0;
+  const reserved = state.orders.filter(o => o.from === from && o.to !== excludeTo && o.frequency === 'once').reduce((sum, o) => sum + o.amount, 0);
+  return Math.max(0, source.troops - 1 - reserved);
+}
+
 function addLog(state, text, type = 'system', owner = null) {
   state.logs.unshift({ id: ++state.sequence, round: state.round, text, type, owner });
   state.logs = state.logs.slice(0, 60);
@@ -92,7 +101,7 @@ function setMarch(state, command) {
   requireRule(adjacent(source, target) && source.owner === actor, '请选择己方领地与相邻目标');
   requireRule(frequency !== 'repeat' || target.owner === actor, '每回合行军需要两个相邻的己方格子');
   requireRule(Number.isInteger(amount) && amount >= 1 && amount <= (frequency === 'repeat' ? 99 : MAX_TROOPS - 1), '派遣兵力超出允许范围');
-  requireRule(frequency !== 'once' || amount < source.troops, '出兵后至少保留 1 兵驻守');
+  requireRule(frequency !== 'once' || amount <= availableTroops(state, from, to), '本回合可调兵力不足：请减少数量或调整其他方向的指令');
   const existing = state.orders.find(order => order.from === from && order.to === to);
   if (existing) Object.assign(existing, { amount, frequency });
   else state.orders.push({ from, to, amount, owner: actor, frequency });
@@ -115,9 +124,18 @@ function limitAmounts(items, budget) {
   return true;
 }
 
+function limitByPriority(items, budget) {
+  const once = items.filter(m => m.frequency === 'once');
+  const repeat = items.filter(m => m.frequency === 'repeat');
+  const reducedOnce = limitAmounts(once, budget);
+  const remaining = budget - once.reduce((sum, m) => sum + m.amount, 0);
+  const reducedRepeat = limitAmounts(repeat, remaining);
+  return reducedOnce || reducedRepeat;
+}
+
 function allocateMarches(state) {
   const marches = state.orders.map(order => ({ ...order })).sort((a, b) => compareId(orderKey(a), orderKey(b)));
-  for (const cell of orderedCells(state)) limitAmounts(marches.filter(m => m.from === cell.id), cell.troops - 1);
+  for (const cell of orderedCells(state)) limitByPriority(marches.filter(m => m.from === cell.id), cell.troops - 1);
   // Friendly capacity includes simultaneous departures. Rejected transfers stay home;
   // reductions propagate backwards until all receiving cells fit, including cycles.
   let changed;
@@ -126,7 +144,7 @@ function allocateMarches(state) {
     for (const cell of orderedCells(state)) {
       const outgoing = marches.filter(m => m.from === cell.id).reduce((sum, m) => sum + m.amount, 0);
       const incoming = marches.filter(m => m.to === cell.id && m.owner === cell.owner);
-      if (limitAmounts(incoming, MAX_TROOPS - cell.troops + outgoing)) changed = true;
+      if (limitByPriority(incoming, MAX_TROOPS - cell.troops + outgoing)) changed = true;
     }
   } while (changed);
   return marches.filter(m => m.amount > 0);
@@ -237,11 +255,13 @@ export function chooseAICommand(state) {
   const scratch = { rng: state.rng };
   for (const source of orderedCells(state)) {
     if (source.owner !== state.current || source.troops < 2 || !state.aiPending.includes(source.id)) continue;
+    const budget = availableTroops(state, source.id);
+    if (budget < 1) continue;
     const ns = neighbors(source, state.cells);
     const hostile = ns.filter(c => c.owner !== source.owner);
     for (const target of (hostile.length ? hostile : ns)) {
       // Random adjacent expansion with a modest preference for viable attacks.
-      const amount = Math.max(1, Math.floor((source.troops - 1) * (0.65 + random(scratch) * 0.35)));
+      const amount = Math.max(1, Math.floor(budget * (0.65 + random(scratch) * 0.35)));
       const frontier = neighbors(target, state.cells).some(n => n.owner !== source.owner);
       const score = random(scratch) * 2 + (target.owner !== source.owner ? winChance(amount, target.troops) * 2 : frontier ? 0.6 : 0);
       if (target.owner === source.owner && target.troops + amount > MAX_TROOPS) continue;
@@ -258,7 +278,7 @@ export function serialize(state) { return JSON.stringify(state); }
 export function restore(raw) {
   try {
     const state = typeof raw === 'string' ? JSON.parse(raw) : cloneState(raw);
-    if (!state || ![1, 2, 3, SAVE_VERSION].includes(state.version) || !state.config || !hasOwn(SIZES, state.config.size)) return null;
+    if (!state || ![1, 2, 3, 4, SAVE_VERSION].includes(state.version) || !state.config || !hasOwn(SIZES, state.config.size)) return null;
     if (!Number.isInteger(state.config.enemies) || state.config.enemies < 1 || state.config.enemies > 5) return null;
     if (!Array.isArray(state.factions) || state.factions.length !== state.config.enemies + 1) return null;
     if (!Number.isInteger(state.rng) || state.rng <= 0 || state.rng > 0xffffffff) return null;
@@ -281,14 +301,13 @@ export function restore(raw) {
       state.orders = state.routes.map(route => ({ ...route, frequency: 'repeat' }));
       delete state.routes;
     }
-    if (state.version < SAVE_VERSION) {
+    if (state.version < 4) {
       if (!Array.isArray(state.orders)) return null;
       // Older AI turns already executed earlier factions. Start a fresh planning
       // phase on the existing board, without replaying or undoing those moves.
       if (state.current !== 0) state.orders = state.orders.filter(order => order.frequency === 'repeat');
       state.current = 0; state.acted = false;
       state.aiPending = orderedCells(state).filter(c => c.owner === 0).map(c => c.id);
-      state.version = SAVE_VERSION;
     }
     if (!Array.isArray(state.orders) || state.orders.length > Object.keys(state.cells).length * 6) return null;
     const seen = new Set();
@@ -300,6 +319,16 @@ export function restore(raw) {
       if (!Number.isInteger(order.amount) || order.amount < 1 || order.amount > (order.frequency === 'repeat' ? 99 : MAX_TROOPS - 1)) return null;
       seen.add(key);
     }
+    for (const cell of orderedCells(state)) {
+      const once = state.orders.filter(o => o.from === cell.id && o.frequency === 'once');
+      if (once.reduce((sum, o) => sum + o.amount, 0) <= cell.troops - 1) continue;
+      if (state.version === SAVE_VERSION) return null;
+      // Older versions allowed overbooking. Preserve their proportional split
+      // while migrating the plans, without moving troops or replaying battles.
+      limitAmounts(once, cell.troops - 1);
+    }
+    state.orders = state.orders.filter(o => o.amount > 0);
+    state.version = SAVE_VERSION;
     if (!Array.isArray(state.logs) || state.logs.length > 60 || state.logs.some(l => typeof l.text !== 'string' || l.text.length > 300 || !Number.isInteger(l.round))) return null;
     if (state.phase === 'playing' && (!alive(state, 0) || !alive(state, state.current) || state.factions.filter(f => alive(state, f.id)).length < 2 || state.winner !== null)) return null;
     if (state.phase === 'finished' && (state.winner !== null && (!Number.isInteger(state.winner) || !alive(state, state.winner)) || alive(state, 0) && state.winner !== 0)) return null;

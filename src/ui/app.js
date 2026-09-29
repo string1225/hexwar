@@ -1,4 +1,4 @@
-import { createGame, applyCommand, chooseAICommand, SIZES, stats, serialize, restore } from '../core/game.js';
+import { createGame, applyCommand, chooseAICommand, availableTroops, SIZES, stats, serialize, restore } from '../core/game.js';
 import { adjacent, toPixel, fromPixel } from '../core/hex.js';
 import { C, text, box, line, hex, dot, arrow, wrap } from './draw.js';
 
@@ -279,13 +279,14 @@ export class GameApp {
   }
   inspector(x, y, w, h, compact) {
     const ctx = this.ctx, source = this.state.cells[this.selected], target = this.state.cells[this.target];
-    this.amount = Math.max(1, Math.min(this.amount, this.frequency === 'repeat' ? 99 : Math.max(1, (source?.troops || 2) - 1)));
+    const budget = availableTroops(this.state, this.selected, this.target);
+    this.amount = Math.min(this.frequency === 'repeat' ? 99 : budget, Math.max(1, this.amount));
     const canControl = !this.busy && this.state.current === 0 && this.state.phase === 'playing' && source?.owner === 0;
     const ix = x + 12, iw = w - 24, orders = this.state.orders.filter(o => o.owner === 0);
     const saved = orders.find(o => o.from === this.selected && o.to === this.target);
     const dirty = saved && (saved.amount !== this.amount || saved.frequency !== this.frequency);
-    const status = saved ? (dirty ? '有修改 · 待更新' : (saved.frequency === 'once' ? '本回合 ' : '每回合 ') + saved.amount + ' 兵 · 已设定') : '结束回合后执行';
-    const description = target ? source.troops + ' 兵 → ' + (target.owner === 0 ? '友军 ' : '守军 ') + target.troops : source ? source.troops + ' 兵 · ' + (source.owner === 0 ? '请选择相邻目标' : source.owner === null ? '中立地块' : this.state.factions[source.owner].name) : '请选择己方领地';
+    const status = saved ? (dirty ? '有修改 · 待更新' : (saved.frequency === 'once' ? '本回合 ' : '每回合 ') + saved.amount + ' 兵 · 已设定') : this.frequency === 'once' && source?.owner === 0 && budget === 0 ? '本回合额度已用完' : this.frequency === 'repeat' ? '本回合优先 · 余兵执行' : '结束回合后执行';
+    const description = target ? source.troops + ' 兵 → ' + (target.owner === 0 ? '友军 ' : '守军 ') + target.troops + ' · 可调 ' + budget : source ? source.troops + ' 兵 · ' + (source.owner === 0 ? '本回合可调 ' + budget : source.owner === null ? '中立地块' : this.state.factions[source.owner].name) : '请选择己方领地';
     box(ctx, x, y, w, h, C.panel, C.border);
     // The map and all main controls retain their bounds through every planning state.
     if (compact) {
@@ -324,21 +325,21 @@ export class GameApp {
     this.button('cancel-order', '撤销指令', x + w - 92, y, 92, 27, () => this.command({ type: 'CANCEL_MARCH', from: this.selected, to: this.target }), 'normal', !canControl || !order);
   }
   amountControl(x, y, w, canControl) {
-    const source = this.state.cells[this.selected];
-    const max = this.frequency === 'repeat' ? 99 : Math.max(1, (source?.troops || 2) - 1);
-    this.amount = Math.max(1, Math.min(this.amount, max));
-    this.button('amount-minus', '−', x, y, 28, 34, () => { this.amount = Math.max(1, this.amount - 1); }, 'normal', !canControl);
+    const budget = availableTroops(this.state, this.selected, this.target);
+    const max = this.frequency === 'repeat' ? 99 : budget;
+    this.amount = Math.min(max, Math.max(1, this.amount));
+    this.button('amount-minus', '−', x, y, 28, 34, () => { this.amount = Math.max(1, this.amount - 1); }, 'normal', !canControl || this.amount <= 1);
     box(this.ctx, x + 32, y, 44, 34, C.bg, C.border, 6);
     text(this.ctx, this.amount, x + 54, y + 17, 18, C.ink, '600', 'center', true);
-    this.button('amount-plus', '+', x + 80, y, 28, 34, () => { this.amount = Math.min(max, this.amount + 1); }, 'normal', !canControl);
+    this.button('amount-plus', '+', x + 80, y, 28, 34, () => { this.amount = Math.min(max, this.amount + 1); }, 'normal', !canControl || this.amount >= max);
     const fw = (w - 126) / 3;
-    [0.25, 0.5, 1].forEach((v, i) => this.button('amount-' + i, ['1/4', '1/2', '全部'][i], x + 114 + i * (fw + 6), y, fw, 34, () => { this.amount = Math.min(max, Math.max(1, Math.floor((source.troops - 1) * v))); }, 'normal', !canControl));
+    [0.25, 0.5, 1].forEach((v, i) => this.button('amount-' + i, ['1/4', '1/2', '全部'][i], x + 114 + i * (fw + 6), y, fw, 34, () => { this.amount = Math.min(max, Math.max(1, Math.floor(budget * v))); }, 'normal', !canControl || budget === 0));
   }
   actionButton(x, y, w, h, canControl, target) {
     const source = this.state.cells[this.selected], repeat = this.frequency === 'repeat';
     const saved = this.state.orders.find(o => o.from === this.selected && o.to === this.target && o.owner === 0);
     const unchanged = saved && saved.amount === this.amount && saved.frequency === this.frequency;
-    const disabled = !canControl || !target || unchanged || (repeat ? target.owner !== 0 : !source || source.troops < 2);
+    const disabled = !canControl || !target || unchanged || this.amount < 1 || (repeat ? target.owner !== 0 : this.amount > availableTroops(this.state, this.selected, this.target));
     this.button('dispatch', saved ? '更新指令' : '设定指令', x, y, w, h, () => {
       if (this.command({ type: 'MARCH', frequency: this.frequency, from: this.selected, to: this.target, amount: this.amount })) {
         this.selectNext = true; this.p.feedback?.();
@@ -437,7 +438,7 @@ export class GameApp {
       }
     } else if (orders) {
       text(ctx, '本回合指令', ix, y + 43, 23, C.ink, '600');
-      text(ctx, '全军同时执行 · 兵力不足按比例分配', ix, y + 76, w < 400 ? 10 : 12, C.muted);
+      text(ctx, '本回合优先 · 每回合使用剩余兵力', ix, y + 76, w < 400 ? 10 : 12, C.muted);
       this.routesPanel(ix, y + 107, iw, h - 124);
     } else if (setup) {
       const scale = Math.min(1, (h - 90) / 445);
@@ -466,7 +467,7 @@ export class GameApp {
       text(ctx, '少一点规则，多一点谋略。', ix, y + 78, 12, C.muted);
       const pages = [
         [ ['01', '规划行军', '点己方领地，再点相邻目标，设置兵力与方向。设定后下一次点格子会直接切换选中。所有计划在结束回合后一起执行。'], ['02', '本回合与每回合', '「本回合」执行一次后清除；相邻友军可选「每回合」持续调兵。同一起点可设多个方向，本回合指令列表可查看和修改。'], ['03', '合兵与遭遇', '同势力抵达同一格的部队合兵作战。双方沿同一路线互攻，先在途中交战，胜方幸存部队继续攻城。败方全灭，胜方损耗会小幅浮动。'] ],
-        [ ['04', '结算与补给', '各方基于同一地图规划，全部锁定后一起结算。兵力不足按比例分配，每格至少留 1 兵；新到的兵本轮不再出发。整轮结束后领地各增加 1 兵。'], ['05', '管理指令', '同一起点与目标只有一条指令。数量和频率没有改动时，更新按钮置灰；调整后亮起，保存后再次置灰。持续调兵任一端失守后取消。'], ['06', '赢下这片疆土', '整轮全部战斗结束后，消灭所有敌对势力的彩色领地即可获胜。出发地失守不影响已出发的部队。每步自动保存，右上角保存图标可查看云存档。'] ],
+        [ ['04', '结算与补给', '全部势力锁定后一起结算。每格留 1 兵，本回合指令合计不能超过余兵；先满足本回合，再以剩余兵力按比例执行每回合指令。援军本轮不再出发，整轮后领地各加 1 兵。'], ['05', '管理指令', '同一起点与目标只有一条指令。数量和频率没有改动时，更新按钮置灰；调整后亮起，保存后再次置灰。持续调兵任一端失守后取消。'], ['06', '赢下这片疆土', '整轮全部战斗结束后，消灭所有敌对势力的彩色领地即可获胜。出发地失守不影响已出发的部队。每步自动保存，右上角保存图标可查看云存档。'] ],
       ];
       const perPage = h < 430 ? 1 : w < 420 ? 2 : 3;
       const entries = pages.flat(), pageCount = Math.ceil(entries.length / perPage);
