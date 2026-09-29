@@ -24,7 +24,7 @@ async function fixture(t) {
 
 test('public health is minimal; save API requires authentication', async t => {
   const { call } = await fixture(t);
-  assert.deepEqual((await call('/health')).data, { ok: true, service: 'hexwar', version: '1.2.0' });
+  assert.deepEqual((await call('/health')).data, { ok: true, service: 'hexwar', version: '1.3.0' });
   assert.equal((await call('/save')).status, 401);
   assert.equal((await call('/save', 'GET', undefined, 'a'.repeat(43))).status, 401);
   assert.equal((await call('/unknown')).status, 404);

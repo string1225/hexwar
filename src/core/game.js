@@ -1,6 +1,6 @@
 import { adjacent, cellId, distance, neighbors } from './hex.js';
 
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 4;
 export const SIZES = {
   small: { label: '小型', radius: 3, cells: 37, duration: '轻快交锋' },
   medium: { label: '中型', radius: 5, cells: 91, duration: '经典战役' },
@@ -85,35 +85,6 @@ function finishIfNeeded(state) {
   }
 }
 
-function move(state, command) {
-  const { from, to, amount, actor } = command;
-  const source = state.cells[from], target = state.cells[to];
-  requireRule(source && target && adjacent(source, target), '只能向相邻格子派兵');
-  requireRule(source.owner === actor, '只能调遣自己的兵力');
-  requireRule(Number.isInteger(amount) && amount >= 1 && amount < source.troops, '出兵后至少保留 1 兵驻守');
-  if (target.owner === actor) requireRule(target.troops + amount <= MAX_TROOPS, '目标格子兵力已达上限');
-  source.troops -= amount;
-  if (target.owner === actor) {
-    target.troops += amount;
-    addLog(state, `${state.factions[actor].name}向友军调遣 ${amount} 兵。`, 'transfer', actor);
-  } else {
-    const defender = target.owner;
-    const defense = target.troops;
-    const chance = winChance(amount, defense);
-    if (random(state) < chance) {
-      target.owner = actor;
-      target.troops = Math.max(1, amount - Math.ceil(defense / 2));
-      addLog(state, `${state.factions[actor].name}攻占 ${to}，${amount} 对 ${defense}，剩余 ${target.troops} 兵。`, 'capture', actor);
-      if (defender !== null && !alive(state, defender)) addLog(state, `${state.factions[defender].name}已被消灭。`, 'eliminated', defender);
-    } else {
-      target.troops = Math.max(1, defense - Math.floor(amount / 2));
-      addLog(state, `${state.factions[actor].name}进攻 ${to} 失利，${amount} 兵阵亡，守军剩余 ${target.troops} 兵。`, 'battle', actor);
-    }
-  }
-  state.acted = true;
-  finishIfNeeded(state);
-}
-
 function setMarch(state, command) {
   const { from, to, amount, actor, frequency } = command;
   const source = state.cells[from], target = state.cells[to];
@@ -129,20 +100,97 @@ function setMarch(state, command) {
   state.aiPending = state.aiPending.filter(id => id !== from);
 }
 
-function resolveOrders(state, actor) {
-  const orders = state.orders.filter(order => order.owner === actor);
-  const available = Object.fromEntries(Object.values(state.cells).map(c => [c.id, c.owner === actor ? c.troops - 1 : 0]));
-  for (const order of orders) {
-    if (state.phase !== 'playing') break;
-    const source = state.cells[order.from], target = state.cells[order.to];
-    if (source.owner !== actor || order.frequency === 'repeat' && target.owner !== actor) continue;
-    const room = target.owner === actor ? MAX_TROOPS - target.troops : MAX_TROOPS;
-    const amount = Math.min(order.amount, available[source.id], source.troops - 1, room);
-    if (amount < 1) continue;
-    available[source.id] -= amount;
-    move(state, { from: order.from, to: order.to, amount, actor });
+const compareId = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+const orderKey = order => order.from + '>' + order.to;
+const orderedCells = state => Object.values(state.cells).sort((a, b) => compareId(a.id, b.id));
+
+// Largest remainders preserve the integer budget without giving earlier clicks priority.
+function limitAmounts(items, budget) {
+  const total = items.reduce((sum, item) => sum + item.amount, 0);
+  if (total <= budget) return false;
+  const shares = items.map(item => ({ item, amount: Math.floor(item.amount * budget / total), remainder: item.amount * budget % total }));
+  let extra = budget - shares.reduce((sum, share) => sum + share.amount, 0);
+  shares.sort((a, b) => b.remainder - a.remainder || compareId(orderKey(a.item), orderKey(b.item)));
+  for (const share of shares) share.item.amount = share.amount + (extra-- > 0 ? 1 : 0);
+  return true;
+}
+
+function allocateMarches(state) {
+  const marches = state.orders.map(order => ({ ...order })).sort((a, b) => compareId(orderKey(a), orderKey(b)));
+  for (const cell of orderedCells(state)) limitAmounts(marches.filter(m => m.from === cell.id), cell.troops - 1);
+  // Friendly capacity includes simultaneous departures. Rejected transfers stay home;
+  // reductions propagate backwards until all receiving cells fit, including cycles.
+  let changed;
+  do {
+    changed = false;
+    for (const cell of orderedCells(state)) {
+      const outgoing = marches.filter(m => m.from === cell.id).reduce((sum, m) => sum + m.amount, 0);
+      const incoming = marches.filter(m => m.to === cell.id && m.owner === cell.owner);
+      if (limitAmounts(incoming, MAX_TROOPS - cell.troops + outgoing)) changed = true;
+    }
+  } while (changed);
+  return marches.filter(m => m.amount > 0);
+}
+
+function battle(armies, seed) {
+  const rng = { rng: seed };
+  const contenders = [...armies.entries()].sort(([a], [b]) => (a ?? -1) - (b ?? -1));
+  const weights = contenders.map(([, amount]) => amount ** BATTLE_EXPONENT);
+  let draw = random(rng) * weights.reduce((sum, weight) => sum + weight, 0);
+  let winner = contenders.length - 1;
+  for (let i = 0; i < contenders.length; i++) {
+    draw -= weights[i];
+    if (draw < 0) { winner = i; break; }
   }
-  state.orders = state.orders.filter(order => order.owner !== actor || order.frequency === 'repeat');
+  const [owner, strength] = contenders[winner];
+  const defeated = contenders.reduce((sum, [side, amount]) => sum + (side === owner ? 0 : amount), 0);
+  const baseline = Math.ceil(defeated / 2), variation = Math.max(1, Math.round(baseline * 0.2));
+  const casualtyDraw = random(rng);
+  const loss = Math.max(0, baseline + (casualtyDraw < 0.2 ? -variation : casualtyDraw < 0.8 ? 0 : variation));
+  return { owner, troops: Math.max(1, strength - loss) };
+}
+
+function resolveRound(state) {
+  const marches = allocateMarches(state), cells = orderedCells(state);
+  const survivorsBefore = state.factions.filter(f => alive(state, f.id));
+  // One saved round seed; each edge/cell gets its own stream. Reordering unrelated
+  // commands or traversing the board differently cannot change a battle's draws.
+  random(state);
+  const seed = location => hash(state.rng + ':' + state.round + ':' + location);
+  const name = owner => owner === null ? '中立守军' : state.factions[owner].name;
+  for (const march of marches) state.cells[march.from].troops -= march.amount;
+
+  const byDirection = new Map(marches.map(m => [orderKey(m), m]));
+  for (const march of marches) {
+    if (compareId(march.from, march.to) >= 0) continue;
+    const reverse = byDirection.get(march.to + '>' + march.from);
+    if (!reverse || reverse.owner === march.owner) continue;
+    const description = march.amount + ' 对 ' + reverse.amount;
+    const result = battle(new Map([[march.owner, march.amount], [reverse.owner, reverse.amount]]), seed('edge:' + orderKey(march)));
+    march.amount = result.owner === march.owner ? result.troops : 0;
+    reverse.amount = result.owner === reverse.owner ? result.troops : 0;
+    addLog(state, '途中交战 ' + march.from + ' ↔ ' + march.to + '，' + description + '，' + name(result.owner) + '剩余 ' + result.troops + ' 兵继续行军。', 'clash', result.owner);
+  }
+
+  const results = [];
+  for (const cell of cells) {
+    const arrivals = marches.filter(m => m.to === cell.id && m.amount > 0);
+    const armies = new Map([[cell.owner, cell.troops]]);
+    for (const march of arrivals) armies.set(march.owner, (armies.get(march.owner) || 0) + march.amount);
+    if (armies.size === 1) {
+      results.push({ id: cell.id, owner: cell.owner, troops: Math.min(MAX_TROOPS, armies.get(cell.owner)) });
+      if (arrivals.length) addLog(state, name(cell.owner) + '向 ' + cell.id + '合并增援 ' + arrivals.reduce((sum, m) => sum + m.amount, 0) + ' 兵。', 'transfer', cell.owner);
+    } else {
+      const result = battle(armies, seed('cell:' + cell.id));
+      results.push({ id: cell.id, owner: result.owner, troops: Math.min(MAX_TROOPS, result.troops) });
+      const forces = [...armies.entries()].sort(([a], [b]) => (a ?? -1) - (b ?? -1)).map(([owner, amount]) => name(owner) + ' ' + amount).join(' / ');
+      addLog(state, cell.id + ' 合兵交战：' + forces + '，' + name(result.owner) + (result.owner === cell.owner ? '守住' : '攻占') + '，剩余 ' + Math.min(MAX_TROOPS, result.troops) + ' 兵。', result.owner === cell.owner ? 'battle' : 'capture', result.owner);
+    }
+  }
+  for (const result of results) Object.assign(state.cells[result.id], result);
+  state.orders = state.orders.filter(order => order.frequency === 'repeat').sort((a, b) => compareId(orderKey(a), orderKey(b)));
+  for (const faction of survivorsBefore) if (!alive(state, faction.id)) addLog(state, faction.name + '已被消灭。', 'eliminated', faction.id);
+  finishIfNeeded(state);
 }
 
 function settleRound(state) {
@@ -160,16 +208,18 @@ export function applyCommand(previous, command) {
     case 'MARCH': setMarch(state, command); break;
     case 'MOVE': setMarch(state, { ...command, frequency: 'once' }); break;
     case 'END_TURN': {
-      resolveOrders(state, command.actor);
-      if (state.phase === 'finished') break;
       let next = state.current;
       do {
         next = (next + 1) % state.factions.length;
-        if (next === 0) settleRound(state);
+        if (next === 0) {
+          resolveRound(state);
+          if (state.phase === 'playing') settleRound(state);
+          break;
+        }
       } while (!alive(state, next));
       state.current = next;
       state.acted = false;
-      state.aiPending = Object.values(state.cells).filter(c => c.owner === next).map(c => c.id);
+      state.aiPending = orderedCells(state).filter(c => c.owner === next).map(c => c.id);
       break;
     }
     case 'SET_ROUTE': setMarch(state, { ...command, frequency: 'repeat' }); break;
@@ -185,7 +235,7 @@ export function applyCommand(previous, command) {
 export function chooseAICommand(state) {
   const candidates = [];
   const scratch = { rng: state.rng };
-  for (const source of Object.values(state.cells)) {
+  for (const source of orderedCells(state)) {
     if (source.owner !== state.current || source.troops < 2 || !state.aiPending.includes(source.id)) continue;
     const ns = neighbors(source, state.cells);
     const hostile = ns.filter(c => c.owner !== source.owner);
@@ -208,7 +258,7 @@ export function serialize(state) { return JSON.stringify(state); }
 export function restore(raw) {
   try {
     const state = typeof raw === 'string' ? JSON.parse(raw) : cloneState(raw);
-    if (!state || ![1, 2, SAVE_VERSION].includes(state.version) || !state.config || !hasOwn(SIZES, state.config.size)) return null;
+    if (!state || ![1, 2, 3, SAVE_VERSION].includes(state.version) || !state.config || !hasOwn(SIZES, state.config.size)) return null;
     if (!Number.isInteger(state.config.enemies) || state.config.enemies < 1 || state.config.enemies > 5) return null;
     if (!Array.isArray(state.factions) || state.factions.length !== state.config.enemies + 1) return null;
     if (!Number.isInteger(state.rng) || state.rng <= 0 || state.rng > 0xffffffff) return null;
@@ -226,10 +276,18 @@ export function restore(raw) {
       state.aiPending = state.acted ? [] : Object.values(state.cells).filter(c => c.owner === state.current).map(c => c.id);
     }
     if (!Array.isArray(state.aiPending) || state.aiPending.length > Object.keys(state.cells).length || new Set(state.aiPending).size !== state.aiPending.length || state.aiPending.some(id => !state.cells[id] || state.cells[id].owner !== state.current)) return null;
-    if (state.version < SAVE_VERSION) {
+    if (state.version < 3) {
       if (!Array.isArray(state.routes)) return null;
       state.orders = state.routes.map(route => ({ ...route, frequency: 'repeat' }));
       delete state.routes;
+    }
+    if (state.version < SAVE_VERSION) {
+      if (!Array.isArray(state.orders)) return null;
+      // Older AI turns already executed earlier factions. Start a fresh planning
+      // phase on the existing board, without replaying or undoing those moves.
+      if (state.current !== 0) state.orders = state.orders.filter(order => order.frequency === 'repeat');
+      state.current = 0; state.acted = false;
+      state.aiPending = orderedCells(state).filter(c => c.owner === 0).map(c => c.id);
       state.version = SAVE_VERSION;
     }
     if (!Array.isArray(state.orders) || state.orders.length > Object.keys(state.cells).length * 6) return null;
@@ -238,7 +296,7 @@ export function restore(raw) {
       const a = state.cells[order.from], b = state.cells[order.to];
       const key = `${order.from}>${order.to}`;
       if (!['once', 'repeat'].includes(order.frequency) || !adjacent(a, b) || !Number.isInteger(order.owner) || !state.factions[order.owner] || a.owner !== order.owner || seen.has(key)) return null;
-      if (order.frequency === 'repeat' ? b.owner !== order.owner : order.owner !== state.current) return null;
+      if (order.frequency === 'repeat' ? b.owner !== order.owner : order.owner > state.current) return null;
       if (!Number.isInteger(order.amount) || order.amount < 1 || order.amount > (order.frequency === 'repeat' ? 99 : MAX_TROOPS - 1)) return null;
       seen.add(key);
     }

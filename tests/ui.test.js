@@ -76,10 +76,12 @@ test('planning keeps the map and panel fixed, preserves the current order, and w
   click(app, 'cancel-order'); assert.equal(app.state.orders.length, 0);
   assert.equal(serialize(app.state.cells), before); assert.deepEqual(bounds(), positions);
   click(app, 'dispatch'); click(app, 'end-turn');
-  assert.equal(app.state.cells[home.id].troops, 8); assert.equal(app.state.cells[target.id].owner, 0);
-  assert.equal(app.state.orders.length, 0); assert.equal(app.toast, ''); assert.deepEqual(app.map, map);
+  assert.equal(serialize(app.state.cells), before);
+  assert.equal(app.state.orders.length, 1); assert.equal(app.toast, ''); assert.deepEqual(app.map, map);
   await new Promise(resolve => setTimeout(resolve, 600));
   assert.equal(app.state.current, 0); assert.deepEqual(app.map, map);
+  assert.equal(app.state.cells[home.id].troops, 9); assert.equal(app.state.cells[target.id].owner, 0);
+  assert.equal(app.state.orders.length, 0);
 });
 
 test('no combat odds are drawn in the inspector, order list, or any rules page', () => {
@@ -91,6 +93,45 @@ test('no combat odds are drawn in the inspector, order list, or any rules page',
     for (let page = 0; page < 6; page++) { app.rulePage = page; app.render(); }
   }
   assert.ok(!app.ctx.drawn.some(value => /胜率|概率|%/.test(value)));
+});
+
+test('update is disabled until values or frequency differ, and reverting edits disables it again', () => {
+  const state = createGame({ size: 'small', enemies: 1, seed: 'dirty-plan' });
+  const home = Object.values(state.cells).find(c => c.owner === 0);
+  const target = neighbors(home, state.cells).find(c => c.owner === null); target.owner = 0;
+  const p = platform(390, 844, serialize(state)), app = new GameApp(p);
+  const disabled = () => app.buttons.find(b => b.id === 'dispatch').disabled;
+  app.chooseCell(target.id); click(app, 'dispatch'); assert.ok(disabled());
+  const saved = p.load(), b = app.buttons.find(b => b.id === 'dispatch');
+  app.pointer('down', b.x + 5, b.y + 5); app.pointer('up', b.x + 5, b.y + 5);
+  assert.equal(p.load(), saved);
+  click(app, 'amount-plus'); assert.ok(!disabled());
+  assert.ok(app.ctx.drawn.includes('有修改 · 待更新'));
+  click(app, 'amount-minus'); assert.ok(disabled());
+  click(app, 'frequency-repeat'); assert.ok(!disabled());
+  click(app, 'frequency-once'); assert.ok(disabled());
+  click(app, 'frequency-repeat'); click(app, 'dispatch'); assert.ok(disabled());
+  const resumed = new GameApp(p); assert.ok(resumed.buttons.find(b => b.id === 'dispatch').disabled);
+  click(app, 'orders'); click(app, `edit-${home.id}>${target.id}`); assert.ok(disabled());
+  click(app, 'cancel-order'); assert.ok(!disabled());
+});
+
+test('after setting or updating a plan the next cell click selects it, including adjacent and hostile cells', () => {
+  const state = createGame({ size: 'small', enemies: 1, seed: 'next-selection' });
+  const home = Object.values(state.cells).find(c => c.owner === 0);
+  const [target, other] = neighbors(home, state.cells).filter(c => c.owner === null);
+  target.owner = 0;
+  const app = new GameApp(platform(390, 844, serialize(state)));
+  app.chooseCell(target.id); click(app, 'dispatch');
+  const planned = serialize(app.state.orders), geometry = { ...app.map };
+  app.chooseCell('outside'); assert.equal(app.selectNext, true);
+  app.chooseCell(other.id); assert.equal(app.selected, other.id); assert.equal(app.target, null);
+  assert.ok(app.buttons.find(b => b.id === 'dispatch').disabled);
+  assert.equal(app.toast, ''); assert.equal(serialize(app.state.orders), planned);
+  app.chooseCell(home.id); app.chooseCell(target.id); click(app, 'amount-plus'); click(app, 'dispatch');
+  app.chooseCell(target.id); assert.equal(app.selected, target.id); assert.equal(app.target, null);
+  app.chooseCell(home.id); assert.equal(app.selected, target.id); assert.equal(app.target, home.id);
+  assert.deepEqual(app.map, geometry);
 });
 test('setup chooses requested size and enemy count; tapping dispatch uses real game rules', () => {
   const p = platform(), app = new GameApp(p);
@@ -129,7 +170,7 @@ test('new campaigns keep size preferences but generate a fresh map seed', () => 
   assert.notEqual(app.state.config.seed, 'previous-campaign');
   assert.notDeepEqual(app.state.cells, saved.cells);
 });
-test('winning through the UI shows a result, persists it and allows another campaign', () => {
+test('winning through the UI shows a result, persists it and allows another campaign', async () => {
   const state = createGame({ size: 'small', enemies: 1, seed: 'winning-ui' });
   const home = Object.values(state.cells).find(c => c.owner === 0);
   for (const c of Object.values(state.cells)) if (c.owner === 1) c.owner = null;
@@ -137,6 +178,7 @@ test('winning through the UI shows a result, persists it and allows another camp
   const p = platform(390, 844, serialize(state)), app = new GameApp(p);
   app.chooseCell(target.id); click(app, 'amount-2'); click(app, 'dispatch');
   assert.equal(app.state.winner, null); click(app, 'end-turn');
+  await new Promise(resolve => setTimeout(resolve, 250));
   assert.equal(app.state.winner, 0); assert.equal(app.modal, 'result');
   const resumed = new GameApp(p); assert.equal(resumed.modal, 'result');
   click(resumed, 'play-again'); assert.equal(resumed.modal, 'setup');
