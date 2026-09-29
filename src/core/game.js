@@ -1,6 +1,6 @@
 import { adjacent, cellId, distance, neighbors } from './hex.js';
 
-export const SAVE_VERSION = 2;
+export const SAVE_VERSION = 3;
 export const SIZES = {
   small: { label: '小型', radius: 3, cells: 37, duration: '轻快交锋' },
   medium: { label: '中型', radius: 5, cells: 91, duration: '经典战役' },
@@ -40,7 +40,7 @@ export function createGame({ size = 'medium', enemies = 3, seed = `${Date.now()}
     version: SAVE_VERSION, config: { size, enemies, seed: String(seed) }, rng: hash(seed),
     round: 1, current: 0, acted: false, phase: 'playing', winner: null,
     cells: {}, factions: FACTIONS.slice(0, enemies + 1).map((f, id) => ({ ...f, id, control: id === 0 ? 'human' : 'ai' })),
-    routes: [], logs: [], sequence: 0, aiPending: [],
+    orders: [], logs: [], sequence: 0, aiPending: [],
   };
   const radius = SIZES[size].radius;
   for (let q = -radius; q <= radius; q++) {
@@ -76,7 +76,7 @@ function addLog(state, text, type = 'system', owner = null) {
 }
 
 function finishIfNeeded(state) {
-  state.routes = state.routes.filter(route => state.cells[route.from].owner === route.owner && state.cells[route.to].owner === route.owner);
+  state.orders = state.orders.filter(order => state.cells[order.from].owner === order.owner && (order.frequency === 'once' || state.cells[order.to].owner === order.owner));
   const survivors = state.factions.filter(f => alive(state, f.id));
   if (survivors.length === 1 || !alive(state, 0)) {
     state.phase = 'finished';
@@ -111,38 +111,44 @@ function move(state, command) {
     }
   }
   state.acted = true;
-  // AI considers each starting territory once; manual orders have no turn quota.
-  state.aiPending = state.aiPending.filter(id => id !== from);
   finishIfNeeded(state);
 }
 
 function setMarch(state, command) {
-  const source = state.cells[command.from], target = state.cells[command.to];
-  requireRule(adjacent(source, target) && source.owner === command.actor && target.owner === command.actor, '每轮行军需要两个相邻的己方格子');
-  requireRule(Number.isInteger(command.amount) && command.amount >= 1 && command.amount <= 99, '每轮派遣量须为 1–99');
-  const existing = state.routes.find(route => route.from === command.from && route.to === command.to);
-  if (existing) existing.amount = command.amount;
-  else state.routes.push({ from: command.from, to: command.to, amount: command.amount, owner: command.actor });
-  addLog(state, `持续行军 ${command.from} → ${command.to}：每轮 ${command.amount} 兵。`, 'route', command.actor);
+  const { from, to, amount, actor, frequency } = command;
+  const source = state.cells[from], target = state.cells[to];
+  requireRule(['once', 'repeat'].includes(frequency), '请选择本回合或每回合执行');
+  requireRule(adjacent(source, target) && source.owner === actor, '请选择己方领地与相邻目标');
+  requireRule(frequency !== 'repeat' || target.owner === actor, '每回合行军需要两个相邻的己方格子');
+  requireRule(Number.isInteger(amount) && amount >= 1 && amount <= (frequency === 'repeat' ? 99 : MAX_TROOPS - 1), '派遣兵力超出允许范围');
+  requireRule(frequency !== 'once' || amount < source.troops, '出兵后至少保留 1 兵驻守');
+  const existing = state.orders.find(order => order.from === from && order.to === to);
+  if (existing) Object.assign(existing, { amount, frequency });
+  else state.orders.push({ from, to, amount, owner: actor, frequency });
+  // AI plans each starting territory once, then resolves all orders at END_TURN.
+  state.aiPending = state.aiPending.filter(id => id !== from);
+}
+
+function resolveOrders(state, actor) {
+  const orders = state.orders.filter(order => order.owner === actor);
+  const available = Object.fromEntries(Object.values(state.cells).map(c => [c.id, c.owner === actor ? c.troops - 1 : 0]));
+  for (const order of orders) {
+    if (state.phase !== 'playing') break;
+    const source = state.cells[order.from], target = state.cells[order.to];
+    if (source.owner !== actor || order.frequency === 'repeat' && target.owner !== actor) continue;
+    const room = target.owner === actor ? MAX_TROOPS - target.troops : MAX_TROOPS;
+    const amount = Math.min(order.amount, available[source.id], source.troops - 1, room);
+    if (amount < 1) continue;
+    available[source.id] -= amount;
+    move(state, { from: order.from, to: order.to, amount, actor });
+  }
+  state.orders = state.orders.filter(order => order.owner !== actor || order.frequency === 'repeat');
 }
 
 function settleRound(state) {
   state.round++;
   for (const cell of Object.values(state.cells)) if (cell.owner !== null) cell.troops = Math.min(MAX_TROOPS, cell.troops + 1);
-  // Resolve from a snapshot: incoming troops cannot travel twice in the same round.
-  const available = Object.fromEntries(Object.values(state.cells).map(c => [c.id, c.troops - 1]));
-  const deltas = {};
-  for (const route of state.routes) {
-    const source = state.cells[route.from], target = state.cells[route.to];
-    if (source.owner !== route.owner || target.owner !== route.owner) continue;
-    const amount = Math.min(route.amount, available[source.id], MAX_TROOPS - target.troops - (deltas[target.id] || 0));
-    if (amount <= 0) continue;
-    available[source.id] -= amount;
-    deltas[source.id] = (deltas[source.id] || 0) - amount;
-    deltas[target.id] = (deltas[target.id] || 0) + amount;
-  }
-  for (const [id, amount] of Object.entries(deltas)) state.cells[id].troops += amount;
-  addLog(state, `第 ${state.round} 轮：全境补给 +1${state.routes.length ? '，持续行军已执行' : ''}。`, 'growth');
+  addLog(state, `第 ${state.round} 轮：全境补给 +1。`, 'growth');
 }
 
 export function applyCommand(previous, command) {
@@ -151,13 +157,11 @@ export function applyCommand(previous, command) {
   requireRule(alive(previous, command.actor), '该势力已被消灭');
   const state = cloneState(previous);
   switch (command.type) {
-    case 'MARCH':
-      requireRule(['once', 'repeat'].includes(command.frequency), '请选择本次或每轮执行');
-      if (command.frequency === 'repeat') setMarch(state, command);
-      else move(state, command);
-      break;
-    case 'MOVE': move(state, command); break;
+    case 'MARCH': setMarch(state, command); break;
+    case 'MOVE': setMarch(state, { ...command, frequency: 'once' }); break;
     case 'END_TURN': {
+      resolveOrders(state, command.actor);
+      if (state.phase === 'finished') break;
       let next = state.current;
       do {
         next = (next + 1) % state.factions.length;
@@ -168,10 +172,10 @@ export function applyCommand(previous, command) {
       state.aiPending = Object.values(state.cells).filter(c => c.owner === next).map(c => c.id);
       break;
     }
-    case 'SET_ROUTE': setMarch(state, command); break;
+    case 'SET_ROUTE': setMarch(state, { ...command, frequency: 'repeat' }); break;
     case 'CANCEL_MARCH':
     case 'REMOVE_ROUTE':
-      state.routes = state.routes.filter(route => !(route.from === command.from && route.owner === command.actor && (command.to === undefined || route.to === command.to)));
+      state.orders = state.orders.filter(order => !(order.from === command.from && order.owner === command.actor && (command.to === undefined || order.to === command.to)));
       break;
     default: throw new RuleError('未知指令');
   }
@@ -204,7 +208,7 @@ export function serialize(state) { return JSON.stringify(state); }
 export function restore(raw) {
   try {
     const state = typeof raw === 'string' ? JSON.parse(raw) : cloneState(raw);
-    if (!state || ![1, SAVE_VERSION].includes(state.version) || !state.config || !hasOwn(SIZES, state.config.size)) return null;
+    if (!state || ![1, 2, SAVE_VERSION].includes(state.version) || !state.config || !hasOwn(SIZES, state.config.size)) return null;
     if (!Number.isInteger(state.config.enemies) || state.config.enemies < 1 || state.config.enemies > 5) return null;
     if (!Array.isArray(state.factions) || state.factions.length !== state.config.enemies + 1) return null;
     if (!Number.isInteger(state.rng) || state.rng <= 0 || state.rng > 0xffffffff) return null;
@@ -220,16 +224,22 @@ export function restore(raw) {
     }
     if (state.version === 1) {
       state.aiPending = state.acted ? [] : Object.values(state.cells).filter(c => c.owner === state.current).map(c => c.id);
-      state.version = SAVE_VERSION;
     }
     if (!Array.isArray(state.aiPending) || state.aiPending.length > Object.keys(state.cells).length || new Set(state.aiPending).size !== state.aiPending.length || state.aiPending.some(id => !state.cells[id] || state.cells[id].owner !== state.current)) return null;
-    if (!Array.isArray(state.routes) || state.routes.length > Object.keys(state.cells).length * 6) return null;
+    if (state.version < SAVE_VERSION) {
+      if (!Array.isArray(state.routes)) return null;
+      state.orders = state.routes.map(route => ({ ...route, frequency: 'repeat' }));
+      delete state.routes;
+      state.version = SAVE_VERSION;
+    }
+    if (!Array.isArray(state.orders) || state.orders.length > Object.keys(state.cells).length * 6) return null;
     const seen = new Set();
-    for (const route of state.routes) {
-      const a = state.cells[route.from], b = state.cells[route.to];
-      const key = `${route.from}>${route.to}`;
-      if (!adjacent(a, b) || !Number.isInteger(route.owner) || !state.factions[route.owner] || a.owner !== route.owner || b.owner !== route.owner || seen.has(key)) return null;
-      if (!Number.isInteger(route.amount) || route.amount < 1 || route.amount > 99) return null;
+    for (const order of state.orders) {
+      const a = state.cells[order.from], b = state.cells[order.to];
+      const key = `${order.from}>${order.to}`;
+      if (!['once', 'repeat'].includes(order.frequency) || !adjacent(a, b) || !Number.isInteger(order.owner) || !state.factions[order.owner] || a.owner !== order.owner || seen.has(key)) return null;
+      if (order.frequency === 'repeat' ? b.owner !== order.owner : order.owner !== state.current) return null;
+      if (!Number.isInteger(order.amount) || order.amount < 1 || order.amount > (order.frequency === 'repeat' ? 99 : MAX_TROOPS - 1)) return null;
       seen.add(key);
     }
     if (!Array.isArray(state.logs) || state.logs.length > 60 || state.logs.some(l => typeof l.text !== 'string' || l.text.length > 300 || !Number.isInteger(l.round))) return null;

@@ -74,7 +74,7 @@ export function createApi({ store, appid, secret, exchangeCode, trustedProxy = f
   return http.createServer(async (req, res) => {
     try {
       const pathname = new URL(req.url, 'http://localhost').pathname;
-      if (pathname === `${PREFIX}/health` && req.method === 'GET') { send(res, 200, { ok: true, service: 'hexwar', version: '1.1.0' }); return; }
+      if (pathname === `${PREFIX}/health` && req.method === 'GET') { send(res, 200, { ok: true, service: 'hexwar', version: '1.2.0' }); return; }
       if (!['/auth/wechat', '/save'].some(route => pathname === PREFIX + route)) throw new HttpError(404, 'NOT_FOUND', '接口不存在。');
       const ip = trustedProxy ? String(req.headers['x-real-ip'] || req.socket.remoteAddress) : req.socket.remoteAddress;
       const now = Date.now(), isLogin = pathname.endsWith('/auth/wechat'), key = `${ip}:${isLogin ? 'login' : 'save'}`;

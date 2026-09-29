@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createGame, applyCommand, chooseAICommand, stats, SIZES, serialize, restore, winChance } from '../src/core/game.js';
+import { createGame, applyCommand, chooseAICommand, stats, SIZES, serialize, restore, winChance, SAVE_VERSION } from '../src/core/game.js';
 import { distance, neighbors, toPixel, fromPixel } from '../src/core/hex.js';
 
 const start = options => createGame({ seed: 'hexwar-test', enemies: 2, ...options });
@@ -45,13 +45,15 @@ test('moves validate turn, adjacency, ownership and integer troops without mutat
   assert.equal(serialize(state), before);
   const result = applyCommand(state, base);
   assert.equal(serialize(state), before);
-  assert.equal(result.cells[a.id].troops, 14);
-  assert.equal(applyCommand(result, base).cells[a.id].troops, 10);
+  assert.equal(result.cells[a.id].troops, 18);
+  assert.deepEqual(result.cells, state.cells); assert.equal(result.rng, state.rng);
+  assert.equal(result.orders.length, 1); assert.equal(applyCommand(result, base).orders.length, 1);
+  assert.equal(command(result, { type: 'END_TURN' }).cells[a.id].troops, 14);
 });
 test('friendly move conserves troops and reserves one garrison', () => {
   const { state, a, b } = scenario(); b.owner = 0;
   const sum = a.troops + b.troops;
-  const next = command(state, { type: 'MOVE', from: a.id, to: b.id, amount: 17 });
+  const next = command(command(state, { type: 'MOVE', from: a.id, to: b.id, amount: 17 }), { type: 'END_TURN' });
   assert.equal(next.cells[a.id].troops, 1);
   assert.equal(next.cells[a.id].troops + next.cells[b.id].troops, sum);
 });
@@ -67,10 +69,10 @@ test('probability targets 95% at 3:1, 50% at parity and complementary reverse od
 test('victory and defeat use the stated casualties', () => {
   const { state, a, b } = scenario(); b.troops = 5;
   state.rng = 1; // next draw ~0.00006
-  const won = command(state, { type: 'MOVE', from: a.id, to: b.id, amount: 10 });
+  const won = command(command(state, { type: 'MOVE', from: a.id, to: b.id, amount: 10 }), { type: 'END_TURN' });
   assert.equal(won.cells[b.id].owner, 0); assert.equal(won.cells[b.id].troops, 7);
   state.rng = 123456; b.troops = 100;
-  const lost = command(state, { type: 'MOVE', from: a.id, to: b.id, amount: 3 });
+  const lost = command(command(state, { type: 'MOVE', from: a.id, to: b.id, amount: 3 }), { type: 'END_TURN' });
   assert.equal(lost.cells[b.id].owner, null); assert.equal(lost.cells[b.id].troops, 99);
 });
 test('growth happens exactly once after every living faction takes a turn; neutrals do not grow', () => {
@@ -80,7 +82,7 @@ test('growth happens exactly once after every living faction takes a turn; neutr
   assert.equal(next.cells[home.id].troops, 19); assert.equal(next.cells[neutral.id].troops, neutral.troops);
   assert.equal(serialize(s), initial);
 });
-test('automatic transport uses post-growth snapshot and cannot relay arriving troops within a round', () => {
+test('recurring orders use the end-turn snapshot before growth and cannot relay arriving troops within a round', () => {
   let { state, a, b } = scenario();
   const c = neighbors(b, state.cells).find(c => c.id !== a.id && c.owner === null);
   b.owner = c.owner = 0; a.troops = 10; b.troops = c.troops = 1;
@@ -88,7 +90,7 @@ test('automatic transport uses post-growth snapshot and cannot relay arriving tr
   state = command(state, { type: 'SET_ROUTE', from: b.id, to: c.id, amount: 8 });
   assert.equal(state.acted, false);
   const next = finishRound(state);
-  assert.equal(next.cells[a.id].troops, 3); assert.equal(next.cells[b.id].troops, 9); assert.equal(next.cells[c.id].troops, 3);
+  assert.equal(next.cells[a.id].troops, 3); assert.equal(next.cells[b.id].troops, 10); assert.equal(next.cells[c.id].troops, 2);
   assert.equal(stats(next, 0).troops, 15);
 });
 test('a recurring march can be edited and removed, with strict ownership checks', () => {
@@ -98,8 +100,8 @@ test('a recurring march can be edited and removed, with strict ownership checks'
   for (const amount of [0, 100, 1.5]) assert.throws(() => command(state, { type: 'SET_ROUTE', from: a.id, to: b.id, amount }));
   state = command(state, { type: 'SET_ROUTE', from: a.id, to: b.id, amount: 2 });
   state = command(state, { type: 'SET_ROUTE', from: a.id, to: b.id, amount: 5 });
-  assert.equal(state.routes.length, 1); assert.equal(state.routes[0].amount, 5);
-  state = command(state, { type: 'REMOVE_ROUTE', from: a.id }); assert.equal(state.routes.length, 0);
+  assert.equal(state.orders.length, 1); assert.equal(state.orders[0].amount, 5);
+  state = command(state, { type: 'REMOVE_ROUTE', from: a.id }); assert.equal(state.orders.length, 0);
 });
 
 test('multiple manual orders can split one army and move different armies in the same turn', () => {
@@ -109,9 +111,11 @@ test('multiple manual orders can split one army and move different armies in the
   const march = (from, to, amount) => { state = command(state, { type: 'MARCH', frequency: 'once', from, to, amount }); };
   march(a.id, b.id, 5); march(a.id, c.id, 4); march(b.id, a.id, 2);
   assert.equal(state.round, 1); assert.equal(state.current, 0);
+  assert.equal(state.cells[a.id].troops, 18); assert.equal(state.orders.length, 3);
+  state = command(state, { type: 'END_TURN' });
   assert.equal(state.cells[a.id].troops, 11); assert.equal(state.cells[b.id].troops, 8); assert.equal(state.cells[c.id].troops, 9);
   assert.equal(stats(state, 0).troops, 28);
-  assert.throws(() => march(a.id, b.id, 11), /至少保留/);
+  assert.equal(state.orders.length, 0);
   assert.deepEqual(restore(serialize(state)), state);
 });
 
@@ -121,12 +125,12 @@ test('multiple recurring directions share the source budget and cancel independe
   b.owner = c.owner = 0; a.troops = 10; b.troops = c.troops = 1;
   for (const target of [b, c]) state = command(state, { type: 'MARCH', frequency: 'repeat', from: a.id, to: target.id, amount: 8 });
   state = command(state, { type: 'MARCH', frequency: 'repeat', from: a.id, to: b.id, amount: 7 });
-  assert.equal(state.routes.length, 2); assert.deepEqual(restore(serialize(state)), state);
+  assert.equal(state.orders.length, 2); assert.deepEqual(restore(serialize(state)), state);
   const next = finishRound(state);
-  assert.equal(next.cells[a.id].troops, 1); assert.equal(next.cells[b.id].troops, 9); assert.equal(next.cells[c.id].troops, 5);
+  assert.equal(next.cells[a.id].troops, 2); assert.equal(next.cells[b.id].troops, 9); assert.equal(next.cells[c.id].troops, 4);
   assert.equal(stats(next, 0).troops, 15);
   state = command(state, { type: 'CANCEL_MARCH', from: a.id, to: b.id });
-  assert.equal(state.routes.length, 1); assert.equal(state.routes[0].to, c.id);
+  assert.equal(state.orders.length, 1); assert.equal(state.orders[0].to, c.id);
 });
 
 test('AI handles multiple starting territories, persists remaining orders and ends its turn', () => {
@@ -147,9 +151,9 @@ test('AI handles multiple starting territories, persists remaining orders and en
 
 test('legacy saves migrate and already-completed AI turns do not replay', () => {
   for (const acted of [false, true]) {
-    const old = start(); old.version = 1; old.current = 1; old.acted = acted; delete old.aiPending;
+    const old = start(); old.version = 1; old.current = 1; old.acted = acted; old.routes = []; delete old.orders; delete old.aiPending;
     const migrated = restore(serialize(old));
-    assert.equal(migrated.version, 2); assert.deepEqual(migrated.cells, old.cells);
+    assert.equal(migrated.version, SAVE_VERSION); assert.deepEqual(migrated.cells, old.cells);
     assert.equal(migrated.aiPending.length, acted ? 0 : 1);
     if (acted) assert.equal(chooseAICommand(migrated).type, 'END_TURN');
   }
@@ -158,23 +162,24 @@ test('capturing a route endpoint cancels the route and eliminates the faction if
   let { state, a, b } = scenario();
   const oldHome = owned(state, 1); oldHome.owner = null; b.owner = 1; b.troops = 1;
   const c = neighbors(b, state.cells).find(c => c.owner === null); c.owner = 1;
-  state.routes.push({ owner: 1, from: b.id, to: c.id, amount: 3 }); state.rng = 1;
+  state.orders.push({ owner: 1, from: b.id, to: c.id, amount: 3, frequency: 'repeat' }); state.rng = 1;
   state = command(state, { type: 'MOVE', from: a.id, to: b.id, amount: 17 });
-  assert.equal(state.routes.length, 0);
+  state = command(state, { type: 'END_TURN' });
+  assert.equal(state.orders.length, 0);
   assert.equal(state.phase, 'playing');
 });
 test('victory needs elimination of colored enemies, not occupation of neutral territory', () => {
   const { state, a, b } = scenario();
   for (const c of Object.values(state.cells)) if (c.owner !== 0) c.owner = null;
   b.owner = 1; b.troops = 1; state.rng = 1;
-  const next = command(state, { type: 'MOVE', from: a.id, to: b.id, amount: 17 });
+  const next = command(command(state, { type: 'MOVE', from: a.id, to: b.id, amount: 17 }), { type: 'END_TURN' });
   assert.equal(next.phase, 'finished'); assert.equal(next.winner, 0);
   assert.ok(Object.values(next.cells).some(c => c.owner === null));
   assert.throws(() => command(next, { type: 'END_TURN' }));
 });
 test('player defeat ends the session even if several AI factions remain', () => {
   const { state, a, b } = scenario(); b.owner = 1; b.troops = 100; a.troops = 1; state.current = 1; state.rng = 1;
-  const next = command(state, { type: 'MOVE', from: b.id, to: a.id, amount: 90 });
+  const next = command(command(state, { type: 'MOVE', from: b.id, to: a.id, amount: 90 }), { type: 'END_TURN' });
   assert.equal(next.phase, 'finished'); assert.equal(next.winner, null);
 });
 test('turn rotation skips eliminated factions', () => {
@@ -184,8 +189,76 @@ test('turn rotation skips eliminated factions', () => {
 test('valid saves roundtrip; corrupt and incompatible saves are rejected', () => {
   const s = start(); assert.deepEqual(restore(serialize(s)), s);
   for (const raw of ['', 'null', '{', '{}', '{"version":999}', '[]']) assert.equal(restore(raw), null);
-  const changes = [s => { s.cells = {}; }, s => { owned(s).troops = -1; }, s => { owned(s).owner = 100; }, s => { s.rng = 0; }, s => { s.current = 9; }, s => { s.routes = [{ from: 'bad' }]; }, s => { s.config.size = '__proto__'; }];
+  const changes = [s => { s.cells = {}; }, s => { owned(s).troops = -1; }, s => { owned(s).owner = 100; }, s => { s.rng = 0; }, s => { s.current = 9; }, s => { s.orders = [{ from: 'bad' }]; }, s => { s.config.size = '__proto__'; }];
   for (const change of changes) { const bad = start(); change(bad); assert.equal(restore(bad), null); }
+});
+
+test('editing and cancelling planned attacks never changes the battlefield or random stream', () => {
+  let { state, a, b } = scenario();
+  const initial = serialize(state.cells), rng = state.rng;
+  state = command(state, { type: 'MARCH', from: a.id, to: b.id, amount: 5, frequency: 'once' });
+  state = command(state, { type: 'MARCH', from: a.id, to: b.id, amount: 9, frequency: 'once' });
+  assert.equal(state.orders.length, 1); assert.equal(state.orders[0].amount, 9);
+  assert.equal(serialize(state.cells), initial); assert.equal(state.rng, rng);
+  assert.deepEqual(restore(serialize(state)), state);
+  state = command(state, { type: 'CANCEL_MARCH', from: a.id, to: b.id });
+  state = command(state, { type: 'END_TURN' });
+  assert.equal(state.orders.length, 0); assert.equal(serialize(state.cells), initial); assert.equal(state.rng, rng);
+});
+
+test('one-off and repeating orders share a snapshot budget and execute once at the actor end-turn', () => {
+  let { state, a, b } = scenario();
+  const c = neighbors(a, state.cells).find(cell => cell.id !== b.id && cell.owner === null);
+  b.owner = c.owner = 0; a.troops = 18; b.troops = c.troops = 1;
+  state = command(state, { type: 'MARCH', from: a.id, to: b.id, amount: 10, frequency: 'once' });
+  state = command(state, { type: 'MARCH', from: a.id, to: c.id, amount: 10, frequency: 'repeat' });
+  assert.equal(state.cells[a.id].troops, 18);
+  state = command(restore(serialize(state)), { type: 'END_TURN' });
+  assert.equal(state.cells[a.id].troops, 1); assert.equal(state.cells[b.id].troops, 11); assert.equal(state.cells[c.id].troops, 8);
+  assert.equal(state.orders.length, 1); assert.equal(state.orders[0].frequency, 'repeat');
+  const after = serialize(state.cells);
+  state = command(state, { type: 'END_TURN' });
+  assert.equal(serialize(state.cells), after); // Other factions must not re-run our orders.
+  state = command(state, { type: 'END_TURN' });
+  assert.equal(state.current, 0); assert.equal(state.cells[a.id].troops, 2);
+  state = command(state, { type: 'END_TURN' });
+  assert.equal(state.cells[a.id].troops, 1); assert.equal(state.cells[c.id].troops, 10);
+});
+
+test('changing frequency replaces the same order and preserves its priority', () => {
+  let { state, a, b } = scenario(); b.owner = 0;
+  state = command(state, { type: 'MARCH', from: a.id, to: b.id, amount: 4, frequency: 'repeat' });
+  state = command(state, { type: 'MARCH', from: a.id, to: b.id, amount: 5, frequency: 'once' });
+  assert.equal(state.orders.length, 1); assert.equal(state.orders[0].frequency, 'once');
+  const before = state.cells[b.id].troops;
+  state = command(state, { type: 'END_TURN' });
+  assert.equal(state.cells[b.id].troops, before + 5); assert.equal(state.orders.length, 0);
+});
+
+test('end-turn transfers respect capacity and never forward arrivals through cycles', () => {
+  let { state, a, b } = scenario(); b.owner = 0; a.troops = 10; b.troops = 9998;
+  state = command(state, { type: 'MARCH', from: a.id, to: b.id, amount: 9, frequency: 'once' });
+  state = command(state, { type: 'MARCH', from: b.id, to: a.id, amount: 9997, frequency: 'once' });
+  state = command(state, { type: 'END_TURN' });
+  assert.equal(state.cells[a.id].troops, 9999); assert.equal(state.cells[b.id].troops, 9);
+  assert.ok(restore(serialize(state)));
+});
+
+test('version 2 routes migrate to planned repeating orders without executing or losing the map', () => {
+  const { state, a, b } = scenario(); b.owner = 0;
+  state.version = 2; state.routes = [{ owner: 0, from: a.id, to: b.id, amount: 5 }]; delete state.orders;
+  const migrated = restore(serialize(state));
+  assert.equal(migrated.version, SAVE_VERSION); assert.deepEqual(migrated.cells, state.cells);
+  assert.equal(migrated.orders[0].frequency, 'repeat'); assert.equal(migrated.orders[0].amount, 5);
+  assert.equal(migrated.rng, state.rng); assert.equal('routes' in migrated, false);
+});
+
+test('invalid and duplicate plans are rejected when restoring', () => {
+  let { state, a, b } = scenario();
+  state = command(state, { type: 'MARCH', from: a.id, to: b.id, amount: 4, frequency: 'once' });
+  for (const change of [s => { s.orders.push({ ...s.orders[0] }); }, s => { s.orders[0].frequency = 'now'; }, s => { s.orders[0].amount = 10000; }, s => { s.orders[0].owner = 1; }, s => { s.orders[0].frequency = 'repeat'; }]) {
+    const invalid = JSON.parse(serialize(state)); change(invalid); assert.equal(restore(invalid), null);
+  }
 });
 test('AI decisions are legal, replayable, bounded and maintain state invariants over long games', () => {
   for (const size of Object.keys(SIZES)) for (let seed = 1; seed <= 8; seed++) {

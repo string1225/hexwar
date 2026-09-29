@@ -2,12 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { build } from 'esbuild';
-import { GameApp, chanceLabel } from '../src/ui/app.js';
+import { GameApp } from '../src/ui/app.js';
 import { createGame, serialize, applyCommand, SAVE_VERSION } from '../src/core/game.js';
 import { neighbors } from '../src/core/hex.js';
 
 function context() {
+  const drawn = [];
   return new Proxy({
+    drawn, fillText: value => drawn.push(String(value)),
     createRadialGradient: () => ({ addColorStop() {} }),
     measureText: text => ({ width: text.length * 8 }),
   }, { get(target, key) { return key in target ? target[key] : () => {}; } });
@@ -31,12 +33,6 @@ function overlaps(a, b) {
   return Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x) > 0.5 && Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y) > 0.5;
 }
 
-test('chance display keeps target odds and never rounds uncertain combat to guaranteed victory', () => {
-  assert.equal(chanceLabel(3, 1), '95%'); assert.equal(chanceLabel(1, 1), '50%');
-  assert.equal(chanceLabel(2, 1), '86.5%'); assert.equal(chanceLabel(1, 3), '5%');
-  assert.equal(chanceLabel(9998, 1), '>99.9%'); assert.equal(chanceLabel(1, 9999), '<0.1%');
-});
-
 test('all main controls remain visible and non-overlapping on desktop, portrait and landscape', () => {
   for (const [w, h, safe] of [[1440, 900], [1280, 720], [1024, 768], [390, 844], [375, 667], [320, 568], [844, 390], [390, 844, { top: 88, bottom: 34 }], [375, 667, { top: 50, bottom: 20 }]]) {
     const app = new GameApp(platform(w, h, null, safe));
@@ -46,7 +42,7 @@ test('all main controls remain visible and non-overlapping on desktop, portrait 
     for (const modal of ['setup', null, 'rules', 'result', 'cloud', 'orders', 'target']) {
       app.target = modal === 'target' ? target.id : null;
       if (modal === 'target') app.frequency = 'repeat';
-      if (modal === 'orders') for (const cell of Object.values(app.state.cells)) for (const n of neighbors(cell, app.state.cells)) app.state.routes.push({ owner: 0, from: cell.id, to: n.id, amount: 2 });
+      if (modal === 'orders') for (const cell of Object.values(app.state.cells)) for (const n of neighbors(cell, app.state.cells)) app.state.orders.push({ owner: 0, from: cell.id, to: n.id, amount: 2, frequency: 'repeat' });
       app.modal = modal === 'target' ? null : modal; app.render();
       for (const b of app.buttons) {
         assert.ok(b.x >= 0 && b.y >= 0 && b.x + b.w <= w && b.y + b.h <= h, `${w}×${h} ${modal} ${b.id} is offscreen: ${JSON.stringify(b)}`);
@@ -58,6 +54,44 @@ test('all main controls remain visible and non-overlapping on desktop, portrait 
     }
   }
 });
+
+test('planning keeps the map and panel fixed, preserves the current order, and waits until end turn', async () => {
+  const state = createGame({ size: 'small', enemies: 1, seed: 'planned-ui' });
+  const home = Object.values(state.cells).find(c => c.owner === 0);
+  const target = neighbors(home, state.cells).find(c => c.owner === null);
+  target.troops = 1; state.rng = 1;
+  const p = platform(390, 844, serialize(state)), app = new GameApp(p);
+  const before = serialize(app.state.cells), map = { ...app.map };
+  const bounds = () => app.buttons.filter(b => ['dispatch', 'end-turn', 'amount-minus', 'orders'].includes(b.id)).map(({id,x,y,w,h}) => ({id,x,y,w,h}));
+  const positions = bounds();
+  app.chooseCell(target.id); app.amount = 9; app.render(); click(app, 'dispatch');
+  assert.equal(serialize(app.state.cells), before); assert.equal(app.target, target.id);
+  assert.deepEqual(bounds(), positions); assert.deepEqual(app.map, map);
+  assert.equal(app.state.orders.length, 1); assert.equal(app.toast, '');
+  click(app, 'amount-plus'); click(app, 'dispatch');
+  assert.equal(app.state.orders[0].amount, 10); assert.deepEqual(app.map, map);
+  const resumed = new GameApp(p);
+  assert.equal(resumed.target, target.id); assert.equal(resumed.amount, 10);
+  assert.equal(resumed.state.cells[home.id].troops, 18);
+  click(app, 'cancel-order'); assert.equal(app.state.orders.length, 0);
+  assert.equal(serialize(app.state.cells), before); assert.deepEqual(bounds(), positions);
+  click(app, 'dispatch'); click(app, 'end-turn');
+  assert.equal(app.state.cells[home.id].troops, 8); assert.equal(app.state.cells[target.id].owner, 0);
+  assert.equal(app.state.orders.length, 0); assert.equal(app.toast, ''); assert.deepEqual(app.map, map);
+  await new Promise(resolve => setTimeout(resolve, 600));
+  assert.equal(app.state.current, 0); assert.deepEqual(app.map, map);
+});
+
+test('no combat odds are drawn in the inspector, order list, or any rules page', () => {
+  const app = new GameApp(platform()); app.newGame();
+  const home = app.state.cells[app.selected], target = neighbors(home, app.state.cells).find(c => c.owner === null);
+  app.ctx.drawn.length = 0; app.chooseCell(target.id); click(app, 'dispatch');
+  for (const modal of ['orders', 'rules']) {
+    app.modal = modal;
+    for (let page = 0; page < 6; page++) { app.rulePage = page; app.render(); }
+  }
+  assert.ok(!app.ctx.drawn.some(value => /胜率|概率|%/.test(value)));
+});
 test('setup chooses requested size and enemy count; tapping dispatch uses real game rules', () => {
   const p = platform(), app = new GameApp(p);
   click(app, 'size-small'); click(app, 'enemies-1'); click(app, 'start-game');
@@ -65,10 +99,10 @@ test('setup chooses requested size and enemy count; tapping dispatch uses real g
   const home = app.state.cells[app.selected], target = neighbors(home, app.state.cells).find(c => c.owner === null);
   app.chooseCell(target.id); click(app, 'amount-2');
   assert.equal(app.amount, 17); click(app, 'dispatch');
-  assert.equal(app.state.acted, true); assert.equal(app.state.cells[home.id].troops, 1);
-  assert.equal(app.target, null);
-  assert.ok(app.map.h > 844 * 0.7);
-  assert.equal(JSON.parse(p.load()).acted, true);
+  assert.equal(app.state.acted, false); assert.equal(app.state.cells[home.id].troops, 18);
+  assert.equal(app.target, target.id); assert.equal(app.state.orders.length, 1);
+  assert.ok(app.map.h > 844 * 0.6);
+  assert.equal(JSON.parse(p.load()).orders.length, 1);
   clearTimeout(app.toastTimer);
 });
 test('route configuration, route deletion and friendly source reselection work through UI controls', () => {
@@ -77,14 +111,14 @@ test('route configuration, route deletion and friendly source reselection work t
   const target = neighbors(home, state.cells).find(c => c.owner === null); target.owner = 0;
   const app = new GameApp(platform(390, 844, serialize(state)));
   app.chooseCell(target.id); click(app, 'frequency-repeat'); click(app, 'dispatch');
-  assert.equal(app.state.routes.length, 1); assert.equal(app.state.acted, false);
+  assert.equal(app.state.orders.length, 1); assert.equal(app.state.acted, false);
   click(app, 'orders'); click(app, `edit-${home.id}>${target.id}`);
   assert.equal(app.frequency, 'repeat'); assert.equal(app.target, target.id);
   click(app, 'amount-plus'); click(app, 'dispatch');
-  assert.equal(app.state.routes.length, 1);
-  click(app, 'orders'); click(app, `remove-${home.id}>${target.id}`); assert.equal(app.state.routes.length, 0);
+  assert.equal(app.state.orders.length, 1);
+  click(app, 'orders'); click(app, `remove-${home.id}>${target.id}`); assert.equal(app.state.orders.length, 0);
   click(app, 'close-modal');
-  app.chooseCell(target.id); app.chooseCell(target.id); assert.equal(app.selected, target.id);
+  app.chooseCell(target.id); assert.equal(app.selected, target.id);
   clearTimeout(app.toastTimer);
 });
 test('new campaigns keep size preferences but generate a fresh map seed', () => {
@@ -102,6 +136,7 @@ test('winning through the UI shows a result, persists it and allows another camp
   const target = neighbors(home, state.cells)[0]; target.owner = 1; target.troops = 1; state.rng = 1;
   const p = platform(390, 844, serialize(state)), app = new GameApp(p);
   app.chooseCell(target.id); click(app, 'amount-2'); click(app, 'dispatch');
+  assert.equal(app.state.winner, null); click(app, 'end-turn');
   assert.equal(app.state.winner, 0); assert.equal(app.modal, 'result');
   const resumed = new GameApp(p); assert.equal(resumed.modal, 'result');
   click(resumed, 'play-again'); assert.equal(resumed.modal, 'setup');
@@ -161,18 +196,4 @@ test('WeChat bundle boots with wx APIs, handles touches and persists without any
   handlers.cancel(); handlers.up({ changedTouches: [] });
   handlers.hide();
   assert.equal(JSON.parse(storage.get('hexwar.save.v1')).version, SAVE_VERSION);
-});
-
-test('UI dispatch remains available across armies and successful attacks do not create a toast', () => {
-  const state = createGame({ size: 'small', enemies: 2, seed: 'multi-order-ui' });
-  const home = Object.values(state.cells).find(c => c.owner === 0);
-  const [a, b] = neighbors(home, state.cells).filter(c => c.owner === null);
-  a.troops = b.troops = 1; home.troops = 100; state.rng = 1;
-  const app = new GameApp(platform(390, 844, serialize(state)));
-  app.chooseCell(a.id); app.amount = 10; app.render(); click(app, 'dispatch');
-  assert.equal(app.state.cells[a.id].owner, 0); assert.equal(app.toast, ''); assert.equal(app.modal, null);
-  app.chooseCell(b.id); app.amount = 10; app.render(); click(app, 'dispatch');
-  assert.equal(app.state.cells[b.id].owner, 0); assert.equal(app.state.round, 1); assert.equal(app.toast, '');
-  app.chooseCell(a.id); app.chooseCell(a.id); app.chooseCell(home.id); app.amount = 2; app.render(); click(app, 'dispatch');
-  assert.equal(app.state.cells[a.id].troops, 7); assert.equal(app.state.current, 0);
 });

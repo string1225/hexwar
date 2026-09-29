@@ -5,7 +5,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { createApi, createStore, exchangeWechatCode } from '../server/service.js';
-import { createGame } from '../src/core/game.js';
+import { createGame, applyCommand } from '../src/core/game.js';
+import { neighbors } from '../src/core/hex.js';
 
 async function fixture(t) {
   const store = createStore(':memory:');
@@ -23,7 +24,7 @@ async function fixture(t) {
 
 test('public health is minimal; save API requires authentication', async t => {
   const { call } = await fixture(t);
-  assert.deepEqual((await call('/health')).data, { ok: true, service: 'hexwar', version: '1.1.0' });
+  assert.deepEqual((await call('/health')).data, { ok: true, service: 'hexwar', version: '1.2.0' });
   assert.equal((await call('/save')).status, 401);
   assert.equal((await call('/save', 'GET', undefined, 'a'.repeat(43))).status, 401);
   assert.equal((await call('/unknown')).status, 404);
@@ -34,7 +35,9 @@ test('login, save and restore isolate accounts and reject stale revisions', asyn
   const a = await login('user-a'), b = await login('user-b');
   assert.match(a, /^[a-zA-Z0-9_-]{43}$/);
   assert.equal((await call('/save', 'GET', undefined, a)).data.revision, 0);
-  const state = createGame({ seed: 'cloud' });
+  const initial = createGame({ seed: 'cloud' }), home = Object.values(initial.cells).find(c => c.owner === 0);
+  const target = neighbors(home, initial.cells).find(c => c.owner === null);
+  const state = applyCommand(initial, { type: 'MARCH', frequency: 'once', from: home.id, to: target.id, amount: 4, actor: 0 });
   const saved = await call('/save', 'PUT', { state, revision: 0 }, a);
   assert.equal(saved.status, 200); assert.equal(saved.data.revision, 1);
   assert.deepEqual((await call('/save', 'GET', undefined, a)).data.state, state);

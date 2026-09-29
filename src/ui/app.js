@@ -1,13 +1,6 @@
-import { createGame, applyCommand, chooseAICommand, SIZES, stats, winChance, serialize, restore } from '../core/game.js';
+import { createGame, applyCommand, chooseAICommand, SIZES, stats, serialize, restore } from '../core/game.js';
 import { adjacent, toPixel, fromPixel } from '../core/hex.js';
 import { C, text, box, line, hex, dot, arrow, wrap } from './draw.js';
-
-export function chanceLabel(attack, defense) {
-  const percent = winChance(attack, defense) * 100;
-  if (percent >= 99.95) return '>99.9%';
-  if (percent < 0.05) return '<0.1%';
-  return `${percent.toFixed(1).replace(/\.0$/, '')}%`;
-}
 
 export class GameApp {
   constructor(platform) {
@@ -35,6 +28,11 @@ export class GameApp {
     const home = Object.values(this.state.cells).filter(c => c.owner === 0).sort((a, b) => b.troops - a.troops)[0];
     this.selected = home?.id || null; this.target = null;
     this.amount = home ? Math.max(1, Math.floor((home.troops - 1) / 2)) : 1;
+    const planned = this.state.orders.filter(order => order.owner === 0).slice(-1)[0];
+    if (planned) {
+      this.selected = planned.from; this.target = planned.to;
+      this.amount = planned.amount; this.frequency = planned.frequency;
+    }
   }
   save() {
     try { this.p.save(serialize(this.state)); } catch { this.notify('本机存档不可用，本局仍可继续。'); }
@@ -131,8 +129,8 @@ export class GameApp {
       this.amount = Math.max(1, Math.floor((cell.troops - 1) / 2));
     } else if (source?.owner === 0 && id !== this.selected && adjacent(source, cell)) {
       this.target = id;
-      const existing = this.state.routes.find(r => r.from === source.id && r.to === id && r.owner === 0);
-      this.frequency = existing ? 'repeat' : 'once';
+      const existing = this.state.orders.find(r => r.from === source.id && r.to === id && r.owner === 0);
+      this.frequency = existing?.frequency || 'once';
       this.amount = existing ? existing.amount : Math.max(1, Math.min(this.amount, source.troops - 1));
     } else if (cell.owner === 0) {
       this.selected = id; this.target = null; this.frequency = 'once';
@@ -171,7 +169,7 @@ export class GameApp {
       box(ctx, (width - tw) / 2, toastY, tw, 36, '#e7edda', null, 9);
       text(ctx, this.toast, width / 2, toastY + 18, Math.min(13, (tw - 24) / this.toast.length), '#203327', '500', 'center');
     }
-    const modalNames = { setup: '战役准备', rules: '玩法指南', result: '战役结算', cloud: '存档', orders: '持续行军' };
+    const modalNames = { setup: '战役准备', rules: '玩法指南', result: '战役结算', cloud: '存档', orders: '本回合指令' };
     this.p.syncControls?.(this.buttons, this.modal ? `六边形战争 · ${modalNames[this.modal]}` : `第 ${this.state.round} 轮，${this.state.factions[this.state.current].name}行动`);
   }
   header() {
@@ -211,7 +209,7 @@ export class GameApp {
     text(this.ctx, entry ? 'R' + entry.round + '  ·  ' + entry.text : '', pad + 2, this.h - this.bottom - 19, 11, C.muted);
   }
   mobileLayout() {
-    const y = this.top + 84, infoH = this.target ? 150 : 62;
+    const y = this.top + 84, infoH = 184;
     this.statusBar(12, this.top + 49, this.w - 24);
     const mapH = Math.max(100, this.h - y - infoH - this.bottom - 20);
     this.drawMap(8, y, this.w - 16, mapH);
@@ -255,9 +253,9 @@ export class GameApp {
         else if (cell.terrain === 2) { dot(ctx, px - 3, py + 12, 1, '#80916750'); dot(ctx, px + 3, py + 12, 1, '#80916750'); }
       }
     }
-    for (const route of this.state.routes) {
+    for (const route of this.state.orders.filter(order => order.owner === 0)) {
       const a = points[route.from], b = points[route.to];
-      arrow(ctx, a.x + (b.x - a.x) * 0.24, a.y + (b.y - a.y) * 0.24, a.x + (b.x - a.x) * 0.77, a.y + (b.y - a.y) * 0.77, C.mint, true);
+      arrow(ctx, a.x + (b.x - a.x) * 0.24, a.y + (b.y - a.y) * 0.24, a.x + (b.x - a.x) * 0.77, a.y + (b.y - a.y) * 0.77, C.mint, route.frequency === 'repeat');
     }
     if (this.target && points[this.selected] && points[this.target]) {
       const a = points[this.selected], b = points[this.target];
@@ -274,54 +272,45 @@ export class GameApp {
   inspector(x, y, w, h, compact) {
     const ctx = this.ctx, source = this.state.cells[this.selected], target = this.state.cells[this.target];
     const canControl = !this.busy && this.state.current === 0 && this.state.phase === 'playing' && source?.owner === 0;
-    const repeat = this.frequency === 'repeat', pad = 12, ix = x + pad, iw = w - pad * 2;
-    const routes = this.state.routes.filter(r => r.owner === 0);
+    const ix = x + 12, iw = w - 24, orders = this.state.orders.filter(o => o.owner === 0);
+    const saved = orders.find(o => o.from === this.selected && o.to === this.target);
+    const description = target ? source.troops + ' 兵 → ' + (target.owner === 0 ? '友军 ' : '守军 ') + target.troops : source ? source.troops + ' 兵 · 请选择相邻目标' : '请选择己方领地';
     box(ctx, x, y, w, h, C.panel, C.border);
-    if (!target) {
-      if (compact) {
-        text(ctx, source ? '已选 ' + source.troops + ' 兵 · 点相邻格' : '点击己方领地', ix, y + 17, 11, C.mint);
-        this.button('orders', '持续指令 · ' + routes.length, ix, y + 30, 112, 26, () => { this.modal = 'orders'; });
-        this.endButton(x + w - 130, y + 12, 118, 40);
-      } else {
-        text(ctx, '行军', ix, y + 26, 16, C.ink, '600');
-        text(ctx, source ? '已选领地 ' + source.id + ' · ' + source.troops + ' 兵' : '选择己方领地', ix, y + 58, 12, C.mint);
-        wrap(ctx, '点选相邻格子下达指令。本回合可以连续派遣，也可以切换其他领地。', ix, y + 92, iw, 12, C.muted, 23);
-        this.button('orders', '持续指令 · ' + routes.length, ix, y + 173, iw, 34, () => { this.modal = 'orders'; });
-        this.endButton(ix, y + h - 54, iw, 42);
-      }
-      return;
-    }
+    // The map and all main controls retain their bounds through every planning state.
     if (compact) {
-      text(ctx, source.troops + ' 兵 → ' + (target.owner === 0 ? '友军 ' : '守军 ') + target.troops, ix, y + 18, 12, C.mint, '600');
-      text(ctx, target.owner === 0 ? '支援' : '胜率 ' + chanceLabel(this.amount, target.troops), ix + iw - 39, y + 18, 11, C.gold, '500', 'right');
-      this.button('cancel-target', '×', ix + iw - 28, y + 5, 28, 27, () => { this.target = null; });
-      this.amountControl(ix, y + 38, iw, canControl, true);
-      this.frequencyControl(ix, y + 80, iw, canControl, target);
+      text(ctx, description, ix, y + 18, 12, C.mint, '600');
+      this.button('cancel-target', '×', ix + iw - 28, y + 5, 28, 27, () => { this.target = null; }, 'normal', !target);
+      this.amountControl(ix, y + 38, iw, canControl && !!target);
+      this.frequencyControl(ix, y + 80, iw, canControl && !!target, target);
       this.actionButton(ix, y + 112, (iw - 8) / 2, 32, canControl, target);
       this.endButton(ix + (iw + 8) / 2, y + 112, (iw - 8) / 2, 32);
+      this.button('orders', '本回合指令 · ' + orders.length, ix, y + 152, 126, 26, () => { this.modal = 'orders'; });
+      text(ctx, saved ? (saved.frequency === 'once' ? '本回合 ' : '每回合 ') + saved.amount + ' 兵 · 已设定' : '结束回合后执行', ix + iw, y + 165, 10, saved ? C.mint : C.dim, '400', 'right');
     } else {
-      text(ctx, '行军', ix, y + 24, 15, C.ink, '600');
-      this.button('cancel-target', '×', ix + iw - 28, y + 10, 28, 27, () => { this.target = null; });
-      text(ctx, source.id + ' → ' + target.id, ix, y + 56, 12, C.mint, '500', 'left', true);
-      text(ctx, '驻军 ' + source.troops + '   /   目标 ' + target.troops + ' 兵', ix, y + 82, 12, C.muted);
-      text(ctx, target.owner === 0 ? '友军支援' : '进攻胜率 ' + chanceLabel(this.amount, target.troops), ix, y + 110, 15, C.gold, '600');
-      this.amountControl(ix, y + 133, iw, canControl, true);
-      this.frequencyControl(ix, y + 176, iw, canControl, target);
-      if (h >= 420) {
-        wrap(ctx, repeat ? '每轮补给后自动执行。兵力不足时按创建顺序分配，至少留 1 兵。' : '立即执行。完成后可以继续下达其他指令，直到主动结束回合。', ix, y + 228, iw, 12, C.muted, 24);
-        this.button('orders', '持续指令 · ' + routes.length, ix, y + 325, iw, 34, () => { this.modal = 'orders'; });
+      text(ctx, '行军计划', ix, y + 24, 15, C.ink, '600');
+      this.button('cancel-target', '×', ix + iw - 28, y + 10, 28, 27, () => { this.target = null; }, 'normal', !target);
+      text(ctx, target ? source.id + ' → ' + target.id : '选择起点与相邻目标', ix, y + 56, 12, C.mint, '500');
+      text(ctx, description, ix, y + 82, 12, C.muted);
+      text(ctx, saved ? '已设定 · ' + (saved.frequency === 'once' ? '本回合 ' : '每回合 ') + saved.amount + ' 兵' : '结束回合后执行', ix, y + 110, 13, saved ? C.mint : C.muted, '600');
+      this.amountControl(ix, y + 133, iw, canControl && !!target);
+      this.frequencyControl(ix, y + 176, iw, canControl && !!target, target);
+      this.button('orders', '本回合指令 · ' + orders.length, ix, y + 219, iw, 30, () => { this.modal = 'orders'; });
+      if (h >= 440) {
+        orders.slice(0, Math.min(3, Math.floor((h - 360) / 46))).forEach((o, i) => {
+          text(ctx, o.from + ' → ' + o.to + '  ·  ' + o.amount + ' 兵', ix, y + 277 + i * 46, 11, C.mint);
+          text(ctx, o.frequency === 'once' ? '本回合待执行' : '每回合待执行', ix, y + 296 + i * 46, 10, C.muted);
+        });
+        if (!orders.length) wrap(ctx, '本回合还没有指令。设置后可以继续修改或取消，地图上的兵力在结束回合时才会变化。', ix, y + 280, iw, 12, C.muted, 24);
       }
-      const bottomY = y + h - 48;
-      this.actionButton(ix, bottomY, (iw - 8) / 2, 36, canControl, target);
-      this.endButton(ix + (iw + 8) / 2, bottomY, (iw - 8) / 2, 36);
+      this.actionButton(ix, y + h - 48, (iw - 8) / 2, 36, canControl, target);
+      this.endButton(ix + (iw + 8) / 2, y + h - 48, (iw - 8) / 2, 36);
     }
   }
   frequencyControl(x, y, w, canControl, target) {
-    this.button('frequency-once', '本次', x, y, 58, 27, () => { this.frequency = 'once'; }, this.frequency === 'once' ? 'active' : 'normal', !canControl);
-    this.button('frequency-repeat', '每轮', x + 64, y, 58, 27, () => { this.frequency = 'repeat'; }, this.frequency === 'repeat' ? 'active' : 'normal', !canControl || target?.owner !== 0);
-    const route = this.state.routes.find(r => r.from === this.selected && r.to === this.target && r.owner === 0);
-    if (route) this.button('cancel-order', '取消持续', x + w - 92, y, 92, 27, () => { this.command({ type: 'CANCEL_MARCH', from: this.selected, to: this.target }); this.frequency = 'once'; }, 'normal', !canControl);
-    else text(this.ctx, target?.owner === 0 ? '每轮可自动执行' : '进攻立即执行', x + w, y + 14, 10, C.dim, '400', 'right');
+    this.button('frequency-once', '本回合', x, y, 60, 27, () => { this.frequency = 'once'; }, this.frequency === 'once' ? 'active' : 'normal', !canControl);
+    this.button('frequency-repeat', '每回合', x + 66, y, 60, 27, () => { this.frequency = 'repeat'; }, this.frequency === 'repeat' ? 'active' : 'normal', !canControl || target?.owner !== 0);
+    const order = this.state.orders.find(o => o.from === this.selected && o.to === this.target && o.owner === 0);
+    this.button('cancel-order', '撤销指令', x + w - 92, y, 92, 27, () => this.command({ type: 'CANCEL_MARCH', from: this.selected, to: this.target }), 'normal', !canControl || !order);
   }
   amountControl(x, y, w, canControl) {
     const source = this.state.cells[this.selected];
@@ -337,18 +326,9 @@ export class GameApp {
   actionButton(x, y, w, h, canControl, target) {
     const source = this.state.cells[this.selected], repeat = this.frequency === 'repeat';
     const disabled = !canControl || !target || (repeat ? target.owner !== 0 : !source || source.troops < 2);
-    const exists = this.state.routes.some(r => r.from === this.selected && r.to === this.target);
-    this.button('dispatch', repeat ? exists ? '更新指令' : '设定每轮行军' : '立即派遣 →', x, y, w, h, () => {
-      const ok = this.command({ type: 'MARCH', frequency: this.frequency, from: this.selected, to: this.target, amount: this.amount });
-      if (ok) {
-        this.p.feedback?.();
-        if (repeat) this.notify('持续指令已保存，下轮补给后执行。');
-        else if (this.state.phase === 'playing') {
-          const updated = this.state.cells[target.id];
-          if (target.owner !== 0 && updated.owner !== 0) this.notify('进攻失利，可继续调兵');
-        }
-        this.target = null; this.frequency = 'once';
-      }
+    const exists = this.state.orders.some(o => o.from === this.selected && o.to === this.target);
+    this.button('dispatch', exists ? '更新指令' : '设定指令', x, y, w, h, () => {
+      if (this.command({ type: 'MARCH', frequency: this.frequency, from: this.selected, to: this.target, amount: this.amount })) this.p.feedback?.();
     }, 'primary', disabled);
   }
   endButton(x, y, w, h) {
@@ -397,10 +377,10 @@ export class GameApp {
     if (!compact) wrap(ctx, '本机每步自动保存。云端由你手动备份，使用当前微信账号识别；断网不影响继续游戏。', x, by + 65, w, 11, C.muted, 21);
   }
   routesPanel(x, y, w, h) {
-    const ctx = this.ctx, routes = this.state.routes.filter(r => r.owner === 0);
+    const ctx = this.ctx, routes = this.state.orders.filter(r => r.owner === 0);
     if (!routes.length) {
-      text(ctx, '还没有持续指令', x, y + 8, 15, C.mint, '600');
-      wrap(ctx, '在战场选择相邻的两个友军格，设置兵力并选择「每轮」。可以为同一起点设置多个方向。', x, y + 44, w, 12, C.muted, 24);
+      text(ctx, '本回合还没有指令', x, y + 8, 15, C.mint, '600');
+      wrap(ctx, '选择起点、相邻目标和兵力，设定「本回合」或「每回合」指令。结束回合前可随时修改或取消。', x, y + 44, w, 12, C.muted, 24);
       return;
     }
     const perPage = Math.max(1, Math.floor((h - 36) / 65)), maxPage = Math.ceil(routes.length / perPage) - 1;
@@ -408,11 +388,11 @@ export class GameApp {
     routes.slice(this.routePage * perPage, (this.routePage + 1) * perPage).forEach((r, i) => {
       const ry = y + i * 65, editW = w - 44;
       this.button('edit-' + r.from + '>' + r.to, '', x, ry, editW, 55, () => {
-        this.selected = r.from; this.target = r.to; this.frequency = 'repeat'; this.amount = r.amount; this.modal = null;
+        this.selected = r.from; this.target = r.to; this.frequency = r.frequency; this.amount = r.amount; this.modal = null;
       }, 'normal', this.busy || this.state.phase !== 'playing');
       this.buttons[this.buttons.length - 1].label = '编辑 ' + r.from + ' → ' + r.to;
       text(ctx, r.from + ' → ' + r.to, x + 10, ry + 17, 11, C.ink, '500', 'left', true);
-      text(ctx, '每轮 ' + r.amount + ' 兵 · 点击修改', x + 10, ry + 38, 10, C.mint);
+      text(ctx, (r.frequency === 'once' ? '本回合 ' : '每回合 ') + r.amount + ' 兵 · 待执行', x + 10, ry + 38, 10, C.mint);
       this.button('remove-' + r.from + '>' + r.to, '×', x + w - 36, ry + 11, 36, 34, () => this.command({ type: 'CANCEL_MARCH', from: r.from, to: r.to }), 'normal', this.busy || this.state.phase !== 'playing');
     });
     const by = y + h - 28;
@@ -441,8 +421,8 @@ export class GameApp {
         wrap(ctx, '刷新页面后可以继续当前战役。微信小游戏内可使用微信账号备份和读取云存档。', ix, y + 164, iw, 12, C.muted, 24);
       }
     } else if (orders) {
-      text(ctx, '持续行军', ix, y + 43, 23, C.ink, '600');
-      text(ctx, '每轮补给后执行 · 兵力不足按创建顺序分配', ix, y + 76, w < 400 ? 10 : 12, C.muted);
+      text(ctx, '本回合指令', ix, y + 43, 23, C.ink, '600');
+      text(ctx, '结束回合执行 · 兵力不足按设置顺序分配', ix, y + 76, w < 400 ? 10 : 12, C.muted);
       this.routesPanel(ix, y + 107, iw, h - 124);
     } else if (setup) {
       const scale = Math.min(1, (h - 90) / 445);
@@ -470,8 +450,8 @@ export class GameApp {
       text(ctx, '指挥官手册', ix, y + 46, 25, C.ink, '600');
       text(ctx, '少一点规则，多一点谋略。', ix, y + 78, 12, C.muted);
       const pages = [
-        [ ['01', '选择与进军', '先点自己的彩色地块，再点相邻地块。选择兵力并派遣；同轮可从多个领地下令，同一格也能分兵，至少留 1 兵。再点已选友军目标可切换起点。'], ['02', '兵力决定胜算', '相同兵力比拥有相同胜率：1:1 为 50%，2:1 约 86.5%，3:1 为 95%，1:3 为 5%。优势越大越稳，但不是必胜。'], ['03', '战斗与伤亡', '进攻胜利：占领目标，出兵减去守军一半（向上取整），至少剩 1。失败：派出兵力全部损失，守军减去出兵一半（向下取整），至少剩 1。'] ],
-        [ ['04', '轮转与补给', '主动结束回合后，电脑依次从多个领地扩展，每个原有领地最多行动一次。所有势力行动完，已占领格 +1 兵，中立格不增长，上限 9999。'], ['05', '统一行军指令', '「本次」立即出兵；友军之间可选「每轮」持续调兵。同一起点可设多个方向，按创建顺序分配余兵。到达的兵不能同轮自动中转，失守后指令取消。'], ['06', '赢下这片疆土', '消灭所有敌对势力的彩色领地即可获胜，无需占领全部中立格。本机每步自动保存，点击右上角保存图标可查看云存档。'] ],
+        [ ['01', '规划行军', '点自己的领地，再点相邻目标，设置兵力与方向。设定指令不会立即出兵，可继续编辑或取消；点击结束回合后才会执行。'], ['02', '本回合与每回合', '「本回合」执行一次后清除；相邻友军可选「每回合」持续调兵。同一起点可设多个方向，本回合指令列表可查看和修改。'], ['03', '战斗与伤亡', '出兵越多，攻占的把握越大。胜利后占领目标并损失部分兵力；失败时派出的兵力全部损失，守军也会受到消耗。'] ],
+        [ ['04', '结算与补给', '结束回合后按设置顺序执行你的指令，再轮到电脑。兵力不足按余量派遣，至少留 1 兵；本次新到的兵不会再次出发。整轮结束，已占领地各增加 1 兵。'], ['05', '管理指令', '同一起点与目标只有一条指令，再次设定会更新数量和频率。本回合内可自由调整，友军持续调兵的任一端失守时，相关指令取消。'], ['06', '赢下这片疆土', '消灭所有敌对势力的彩色领地即可获胜，无需占领全部中立格。每步自动保存，未执行的指令也会保留。右上角保存图标可查看云存档。'] ],
       ];
       const perPage = h < 430 ? 1 : w < 420 ? 2 : 3;
       const entries = pages.flat(), pageCount = Math.ceil(entries.length / perPage);
