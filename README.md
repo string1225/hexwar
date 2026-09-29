@@ -45,7 +45,7 @@ npm run wechat:preview  # 构建，生成 artifacts/wechat-preview.jpg 扫码预
 npm run wechat:upload   # 构建，上传微信开发版本；不自动提审或正式发布
 ```
 
-上述流程通过 `miniprogram-ci` 调用微信平台，不依赖开发工具 CLI 服务端口。预览和上传经 SSH 使用 139 的网络出口，上传密钥留在本机；需在此 AppID 的「小程序代码上传」IP 白名单中加入 `139.224.12.141`。这与服务器域名白名单是两项独立设置。App Secret 仅用于服务器。
+上述流程通过 `miniprogram-ci` 调用微信平台，不依赖开发工具 CLI 服务端口。预览和上传经 SSH 使用 139 的网络出口，上传密钥留在本机；若开启此 AppID 的「小程序代码上传」IP 白名单，需加入 `139.224.12.141`。这与服务器域名白名单是两项独立设置。App Secret 仅用于服务器。
 
 ## 139 服务器
 
