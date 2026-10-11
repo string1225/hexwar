@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createGame, applyCommand, chooseAICommand, stats, SIZES, serialize, restore, winChance, SAVE_VERSION } from '../src/core/game.js';
 import { distance, neighbors, toPixel, fromPixel } from '../src/core/hex.js';
 
-const start = options => createGame({ seed: 'hexwar-test', enemies: 2, ...options });
+const start = options => createGame({ seed: 'hexwar-test', enemies: 2, holes: false, ...options });
 const owned = (state, owner = 0) => Object.values(state.cells).find(c => c.owner === owner);
 const command = (state, value) => applyCommand(state, { actor: state.current, ...value });
 function scenario() {

@@ -1,6 +1,9 @@
-import { adjacent, cellId, distance, neighbors } from './hex.js';
+import { adjacent } from './hex.js';
+import { mapLayout, carveHoles, randomSpawns, SHAPES } from './map.js';
+import { aiCommand, DIFFICULTIES } from './ai.js';
+export { SHAPES, DIFFICULTIES };
 
-export const SAVE_VERSION = 5;
+export const SAVE_VERSION = 6;
 export const SIZES = {
   small: { label: '小型', radius: 3, cells: 37, duration: '轻快交锋' },
   medium: { label: '中型', radius: 5, cells: 91, duration: '经典战役' },
@@ -33,27 +36,24 @@ export function random(state) {
   return state.rng / 4294967296;
 }
 
-export function createGame({ size = 'medium', enemies = 3, seed = `${Date.now()}` } = {}) {
+export function createGame({ size = 'medium', enemies = 3, shape = 'hexagon', holes = true, difficulty = 'standard', seed = `${Date.now()}` } = {}) {
   requireRule(hasOwn(SIZES, size), '未知地图尺寸');
+  requireRule(hasOwn(SHAPES, shape), '未知地图形状');
+  requireRule(hasOwn(DIFFICULTIES, difficulty), '未知敌军智能档位');
+  requireRule(typeof holes === 'boolean', '空洞设置无效');
   requireRule(Number.isInteger(enemies) && enemies >= 1 && enemies <= 5, '敌对势力须为 1–5 个');
   const state = {
-    version: SAVE_VERSION, config: { size, enemies, seed: String(seed) }, rng: hash(seed),
+    version: SAVE_VERSION, config: { size, enemies, shape, holes, difficulty, seed: String(seed) }, rng: hash(seed),
     round: 1, current: 0, acted: false, phase: 'playing', winner: null,
     cells: {}, factions: FACTIONS.slice(0, enemies + 1).map((f, id) => ({ ...f, id, control: id === 0 ? 'human' : 'ai' })),
     orders: [], logs: [], sequence: 0, aiPending: [],
   };
   const radius = SIZES[size].radius;
-  for (let q = -radius; q <= radius; q++) {
-    for (let r = Math.max(-radius, -q - radius); r <= Math.min(radius, -q + radius); r++) {
-      const id = cellId(q, r);
-      state.cells[id] = { id, q, r, owner: null, troops: 1 + Math.floor(random(state) * 6), terrain: Math.floor(random(state) * 3) };
-    }
+  for (const cell of Object.values(mapLayout(radius, shape))) {
+    state.cells[cell.id] = { ...cell, owner: null, troops: 1 + Math.floor(random(state) * 6), terrain: Math.floor(random(state) * 3) };
   }
-  const angle = c => Math.atan2(1.5 * c.r, Math.sqrt(3) * (c.q + c.r / 2));
-  const ring = Object.values(state.cells).filter(c => distance(c, { q: 0, r: 0 }) === radius - 1).sort((a, b) => angle(a) - angle(b));
-  if (random(state) < 0.5) ring.reverse();
-  const offset = Math.floor(random(state) * ring.length);
-  const spawns = state.factions.map((_, i) => ring[(offset + Math.floor(i * ring.length / (enemies + 1))) % ring.length]);
+  if (holes) carveHoles(state.cells, () => random(state));
+  const spawns = randomSpawns(state.cells, state.factions.length, () => random(state));
   spawns.forEach((cell, owner) => { cell.owner = owner; cell.troops = 18; });
   state.aiPending = [spawns[0].id];
   addLog(state, '战役开始。选择翡翠领地，向相邻地块进军。', 'system');
@@ -251,34 +251,17 @@ export function applyCommand(previous, command) {
 }
 
 export function chooseAICommand(state) {
-  const candidates = [];
   const scratch = { rng: state.rng };
-  for (const source of orderedCells(state)) {
-    if (source.owner !== state.current || source.troops < 2 || !state.aiPending.includes(source.id)) continue;
-    const budget = availableTroops(state, source.id);
-    if (budget < 1) continue;
-    const ns = neighbors(source, state.cells);
-    const hostile = ns.filter(c => c.owner !== source.owner);
-    for (const target of (hostile.length ? hostile : ns)) {
-      // Random adjacent expansion with a modest preference for viable attacks.
-      const amount = Math.max(1, Math.floor(budget * (0.65 + random(scratch) * 0.35)));
-      const frontier = neighbors(target, state.cells).some(n => n.owner !== source.owner);
-      const score = random(scratch) * 2 + (target.owner !== source.owner ? winChance(amount, target.troops) * 2 : frontier ? 0.6 : 0);
-      if (target.owner === source.owner && target.troops + amount > MAX_TROOPS) continue;
-      candidates.push({ score, type: 'MARCH', frequency: 'once', actor: state.current, from: source.id, to: target.id, amount });
-    }
-  }
-  candidates.sort((a, b) => b.score - a.score);
-  if (!candidates.length) return { type: 'END_TURN', actor: state.current };
-  const { score, ...command } = candidates[0];
-  return command;
+  return aiCommand(state, { budget: from => availableTroops(state, from), chance: winChance, nextRandom: () => random(scratch) });
 }
 
 export function serialize(state) { return JSON.stringify(state); }
 export function restore(raw) {
   try {
     const state = typeof raw === 'string' ? JSON.parse(raw) : cloneState(raw);
-    if (!state || ![1, 2, 3, 4, SAVE_VERSION].includes(state.version) || !state.config || !hasOwn(SIZES, state.config.size)) return null;
+    if (!state || ![1, 2, 3, 4, 5, SAVE_VERSION].includes(state.version) || !state.config || !hasOwn(SIZES, state.config.size)) return null;
+    if (state.version < 6) Object.assign(state.config, { shape: 'hexagon', holes: false, difficulty: 'standard' });
+    if (!hasOwn(SHAPES, state.config.shape) || !hasOwn(DIFFICULTIES, state.config.difficulty) || typeof state.config.holes !== 'boolean' || typeof state.config.seed !== 'string') return null;
     if (!Number.isInteger(state.config.enemies) || state.config.enemies < 1 || state.config.enemies > 5) return null;
     if (!Array.isArray(state.factions) || state.factions.length !== state.config.enemies + 1) return null;
     if (!Number.isInteger(state.rng) || state.rng <= 0 || state.rng > 0xffffffff) return null;
@@ -286,9 +269,13 @@ export function restore(raw) {
     if (!Number.isInteger(state.current) || !state.factions[state.current] || typeof state.acted !== 'boolean') return null;
     if (!['playing', 'finished'].includes(state.phase)) return null;
     const expected = createGame(state.config);
-    if (!state.cells || Object.keys(state.cells).length !== Object.keys(expected.cells).length) return null;
+    const layout = mapLayout(SIZES[state.config.size].radius, state.config.shape);
+    // Legacy boards predate holes. Validate their original full outline without
+    // rerolling either terrain, starting points, or their current random stream.
+    const expectedCells = state.version < 6 ? layout : expected.cells;
+    if (!state.cells || Object.keys(state.cells).length !== Object.keys(expectedCells).length) return null;
     for (const [id, cell] of Object.entries(state.cells)) {
-      if (!expected.cells[id] || cell.id !== id || cell.q !== expected.cells[id].q || cell.r !== expected.cells[id].r) return null;
+      if (!expectedCells[id] || cell.id !== id || cell.q !== expectedCells[id].q || cell.r !== expectedCells[id].r) return null;
       if (!(cell.owner === null || Number.isInteger(cell.owner) && !!state.factions[cell.owner])) return null;
       if (!Number.isInteger(cell.troops) || cell.troops < 1 || cell.troops > MAX_TROOPS || ![0, 1, 2].includes(cell.terrain)) return null;
     }
@@ -322,7 +309,7 @@ export function restore(raw) {
     for (const cell of orderedCells(state)) {
       const once = state.orders.filter(o => o.from === cell.id && o.frequency === 'once');
       if (once.reduce((sum, o) => sum + o.amount, 0) <= cell.troops - 1) continue;
-      if (state.version === SAVE_VERSION) return null;
+      if (state.version >= 5) return null;
       // Older versions allowed overbooking. Preserve their proportional split
       // while migrating the plans, without moving troops or replaying battles.
       limitAmounts(once, cell.troops - 1);

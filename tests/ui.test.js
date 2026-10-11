@@ -101,7 +101,7 @@ test('update is disabled until values or frequency differ, and reverting edits d
   const target = neighbors(home, state.cells).find(c => c.owner === null); target.owner = 0;
   const p = platform(390, 844, serialize(state)), app = new GameApp(p);
   const disabled = () => app.buttons.find(b => b.id === 'dispatch').disabled;
-  app.chooseCell(target.id); click(app, 'dispatch'); assert.ok(disabled());
+  app.chooseCell(target.id); click(app, 'frequency-once'); click(app, 'amount-1'); click(app, 'dispatch'); assert.ok(disabled());
   const saved = p.load(), b = app.buttons.find(b => b.id === 'dispatch');
   app.pointer('down', b.x + 5, b.y + 5); app.pointer('up', b.x + 5, b.y + 5);
   assert.equal(p.load(), saved);
@@ -122,13 +122,14 @@ test('manual sliders and shortcuts respect shared budget, editing credits, and z
   const [a, b, c] = neighbors(home, state.cells).filter(c => c.owner === null);
   for (const target of [a, b, c]) { target.owner = 0; target.troops = 1; }
   const app = new GameApp(platform(390, 844, serialize(state)));
-  app.chooseCell(a.id); app.amount = 6; app.render(); click(app, 'dispatch');
+  app.chooseCell(a.id); click(app, 'frequency-once'); app.amount = 6; app.render(); click(app, 'dispatch');
   app.chooseCell(home.id); app.chooseCell(b.id);
+  click(app, 'frequency-once');
   click(app, 'amount-2'); assert.equal(app.amount, 3);
   assert.ok(app.buttons.find(b => b.id === 'amount-plus').disabled);
   click(app, 'amount-1'); assert.equal(app.amount, 1);
   click(app, 'amount-2'); click(app, 'dispatch');
-  app.chooseCell(home.id); app.chooseCell(c.id); assert.equal(app.amount, 0);
+  app.chooseCell(home.id); app.chooseCell(c.id); click(app, 'frequency-once'); assert.equal(app.amount, 0);
   for (const id of ['amount-minus', 'amount-plus', 'amount-0', 'amount-1', 'amount-2', 'dispatch']) assert.ok(app.buttons.find(b => b.id === id).disabled, id);
   assert.ok(app.ctx.drawn.includes('本回合额度已用完'));
   click(app, 'frequency-repeat'); assert.equal(app.amount, 1); click(app, 'dispatch');
@@ -153,15 +154,16 @@ test('after setting or updating a plan the next cell click selects it, including
   app.chooseCell(other.id); assert.equal(app.selected, other.id); assert.equal(app.target, null);
   assert.ok(app.buttons.find(b => b.id === 'dispatch').disabled);
   assert.equal(app.toast, ''); assert.equal(serialize(app.state.orders), planned);
-  app.chooseCell(home.id); app.chooseCell(target.id); click(app, 'amount-plus'); click(app, 'dispatch');
+  app.chooseCell(home.id); app.chooseCell(target.id); click(app, 'amount-minus'); click(app, 'dispatch');
   app.chooseCell(target.id); assert.equal(app.selected, target.id); assert.equal(app.target, null);
   app.chooseCell(home.id); assert.equal(app.selected, target.id); assert.equal(app.target, home.id);
   assert.deepEqual(app.map, geometry);
 });
 test('setup chooses requested size and enemy count; tapping dispatch uses real game rules', () => {
   const p = platform(), app = new GameApp(p);
-  click(app, 'size-small'); click(app, 'enemies-1'); click(app, 'start-game');
+  click(app, 'size-small'); click(app, 'enemies-1'); click(app, 'shape-rectangle'); click(app, 'difficulty-advanced'); click(app, 'start-game');
   assert.equal(app.state.config.size, 'small'); assert.equal(app.state.config.enemies, 1);
+  assert.equal(app.state.config.shape, 'rectangle'); assert.equal(app.state.config.difficulty, 'advanced'); assert.equal(app.state.config.holes, true);
   const home = app.state.cells[app.selected], target = neighbors(home, app.state.cells).find(c => c.owner === null);
   app.chooseCell(target.id); click(app, 'amount-2');
   assert.equal(app.amount, 17); click(app, 'dispatch');
@@ -180,7 +182,7 @@ test('route configuration, route deletion and friendly source reselection work t
   assert.equal(app.state.orders.length, 1); assert.equal(app.state.acted, false);
   click(app, 'orders'); click(app, `edit-${home.id}>${target.id}`);
   assert.equal(app.frequency, 'repeat'); assert.equal(app.target, target.id);
-  click(app, 'amount-plus'); click(app, 'dispatch');
+  click(app, 'amount-minus'); click(app, 'dispatch');
   assert.equal(app.state.orders.length, 1);
   click(app, 'orders'); click(app, `remove-${home.id}>${target.id}`); assert.equal(app.state.orders.length, 0);
   click(app, 'close-modal');
@@ -188,12 +190,39 @@ test('route configuration, route deletion and friendly source reselection work t
   clearTimeout(app.toastTimer);
 });
 test('new campaigns keep size preferences but generate a fresh map seed', () => {
-  const saved = createGame({ size: 'large', enemies: 5, seed: 'previous-campaign' });
+  const saved = createGame({ size: 'large', enemies: 5, shape: 'rectangle', difficulty: 'advanced', seed: 'previous-campaign' });
   const app = new GameApp(platform(390, 844, serialize(saved)));
   click(app, 'new'); click(app, 'start-game');
   assert.equal(app.state.config.size, 'large'); assert.equal(app.state.config.enemies, 5);
+  assert.equal(app.state.config.shape, 'rectangle'); assert.equal(app.state.config.difficulty, 'advanced');
   assert.notEqual(app.state.config.seed, 'previous-campaign');
   assert.notDeepEqual(app.state.cells, saved.cells);
+});
+
+test('new friendly directions default to recurring 99, existing plans keep their saved values, and hostile directions use once', () => {
+  const state = createGame({ size: 'small', enemies: 1, seed: 'friendly-default' });
+  const home = Object.values(state.cells).find(c => c.owner === 0), [friend, neutral] = neighbors(home, state.cells);
+  friend.owner = 0; home.troops = 3;
+  const p = platform(390, 844, serialize(state)), app = new GameApp(p);
+  app.chooseCell(friend.id); assert.equal(app.frequency, 'repeat'); assert.equal(app.amount, 99);
+  click(app, 'dispatch'); assert.equal(app.state.orders[0].amount, 99); assert.equal(app.state.cells[home.id].troops, 3);
+  click(app, 'amount-1'); click(app, 'dispatch'); assert.equal(app.state.orders[0].amount, 1);
+  app.chooseCell(home.id); app.chooseCell(friend.id); assert.equal(app.amount, 1); assert.equal(app.frequency, 'repeat');
+  app.chooseCell(neutral.id); assert.equal(app.frequency, 'once'); assert.ok(app.amount <= 2);
+  assert.deepEqual(new GameApp(p).state.orders, app.state.orders);
+});
+
+test('default saves and save panel are local; failed silent remote operations do not show errors or alter the local save', async () => {
+  const p = platform(); let reads = 0, writes = 0;
+  p.cloud = { read: async () => { reads++; throw new Error('remote network failure'); }, write: async () => { writes++; throw new Error('remote write failure'); } };
+  const app = new GameApp(p); app.newGame(); app.save(); const stored = p.load();
+  click(app, 'save'); assert.equal(reads, 0); assert.equal(writes, 0); assert.equal(app.cloudExpanded, false);
+  click(app, 'cloud-open'); await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(reads, 1); assert.equal(app.cloudError, ''); assert.equal(app.toast, ''); assert.equal(p.load(), stored);
+  app.cloudRecord = { revision: 0, state: null }; await app.writeCloud({ silent: true });
+  assert.equal(writes, 1); assert.equal(app.cloudBusy, false); assert.equal(app.cloudError, ''); assert.equal(app.toast, ''); assert.equal(p.load(), stored);
+  assert.ok(!app.ctx.drawn.some(value => /remote|失败|报错/.test(value)));
+  click(app, 'close-modal'); assert.ok(!app.buttons.find(b => b.id === 'end-turn').disabled);
 });
 test('winning through the UI shows a result, persists it and allows another campaign', async () => {
   const state = createGame({ size: 'small', enemies: 1, seed: 'winning-ui' });
@@ -211,15 +240,18 @@ test('winning through the UI shows a result, persists it and allows another camp
 });
 test('cloud actions are explicit, validate downloaded saves and preserve local play on errors', async () => {
   const p = platform(), remote = createGame({ size: 'small', enemies: 1, seed: 'cloud-restore' });
-  let writes = 0;
+  let writes = 0, reads = 0;
   p.cloud = {
-    read: async () => ({ revision: 4, state: remote }),
+    read: async () => { reads++; return { revision: 4, state: remote }; },
     write: async (_state, revision) => { writes++; assert.equal(revision, 4); return { revision: 5, savedAt: Date.now() }; },
   };
   const app = new GameApp(p); app.newGame(); const local = serialize(app.state);
   assert.ok(!app.buttons.some(b => b.id === 'cloud-backup' || b.id === 'tab-cloud'));
   click(app, 'save');
   assert.equal(app.modal, 'cloud');
+  assert.equal(reads, 0); assert.equal(writes, 0);
+  assert.ok(app.ctx.drawn.includes('本机进度已保留'));
+  click(app, 'cloud-open');
   await new Promise(resolve => setTimeout(resolve, 0));
   assert.equal(serialize(app.state), local); // Opening the modal never overwrites local progress.
   app.restoreCloud(); assert.equal(app.state.config.seed, 'cloud-restore');
@@ -227,7 +259,8 @@ test('cloud actions are explicit, validate downloaded saves and preserve local p
   for (const b of app.buttons) assert.ok(b.x >= 0 && b.x + b.w <= 390 && b.y + b.h <= 844);
   p.cloud.read = async () => { throw new Error('offline'); };
   const before = serialize(app.state); await app.readCloud();
-  assert.equal(serialize(app.state), before); assert.equal(app.cloudBusy, false); assert.equal(app.cloudError, 'offline');
+  assert.equal(serialize(app.state), before); assert.equal(app.cloudBusy, false);
+  assert.ok(!app.ctx.drawn.includes('offline'));
   clearTimeout(app.toastTimer);
 });
 test('reloading an AI turn resumes once, grows once, and returns to player', async () => {

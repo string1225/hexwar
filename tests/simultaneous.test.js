@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createGame, applyCommand, chooseAICommand, cloneState, serialize, restore, SAVE_VERSION } from '../src/core/game.js';
 
 function board(seed = 1) {
-  const state = createGame({ size: 'small', enemies: 2, seed: 'simultaneous' });
+  const state = createGame({ size: 'small', enemies: 2, holes: false, seed: 'simultaneous' });
   for (const cell of Object.values(state.cells)) { cell.owner = null; cell.troops = 1; }
   for (const [id, owner, troops] of [['-1,0', 0, 20], ['1,0', 1, 20], ['0,2', 2, 20]]) Object.assign(state.cells[id], { owner, troops });
   state.rng = seed; state.aiPending = ['-1,0']; state.cells['0,0'].troops = 10;

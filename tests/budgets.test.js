@@ -4,7 +4,7 @@ import { createGame, applyCommand, availableTroops, cloneState, restore, seriali
 import { neighbors } from '../src/core/hex.js';
 
 function fixture() {
-  const state = createGame({ size: 'small', enemies: 2, seed: 'troop-budget' });
+  const state = createGame({ size: 'small', enemies: 2, holes: false, seed: 'troop-budget' });
   const a = Object.values(state.cells).find(c => c.owner === 0);
   const [b, c, d] = neighbors(a, state.cells).filter(c => c.owner === null);
   a.troops = 10;

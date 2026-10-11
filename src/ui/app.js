@@ -1,4 +1,4 @@
-import { createGame, applyCommand, chooseAICommand, availableTroops, SIZES, stats, serialize, restore } from '../core/game.js';
+import { createGame, applyCommand, chooseAICommand, availableTroops, SIZES, SHAPES, DIFFICULTIES, stats, serialize, restore } from '../core/game.js';
 import { adjacent, toPixel, fromPixel } from '../core/hex.js';
 import { C, text, box, line, hex, dot, arrow, wrap } from './draw.js';
 
@@ -9,7 +9,7 @@ export class GameApp {
     this.buttons = []; this.selected = null; this.target = null; this.amount = 1;
     this.zoom = 1; this.pan = { x: 0, y: 0 }; this.hover = null; this.busy = false;
     this.frequency = 'once'; this.toast = ''; this.generation = 0;
-    this.setup = { size: 'medium', enemies: 3 };
+    this.setup = { size: 'medium', enemies: 3, shape: 'hexagon', difficulty: 'standard' };
     let saved;
     try { saved = restore(platform.load()); } catch { /* Storage can be disabled. */ }
     this.state = saved || createGame(this.setup);
@@ -55,7 +55,7 @@ export class GameApp {
   }
   newGame() {
     this.generation++; this.busy = false;
-    this.state = createGame({ size: this.setup.size, enemies: this.setup.enemies });
+    this.state = createGame(this.setup);
     this.modal = null; this.zoom = 1; this.pan = { x: 0, y: 0 }; this.frequency = 'once';
     this.selectHome(); this.save(); this.render();
   }
@@ -138,8 +138,8 @@ export class GameApp {
     } else if (source?.owner === 0 && id !== this.selected && adjacent(source, cell)) {
       this.target = id;
       const existing = this.state.orders.find(r => r.from === source.id && r.to === id && r.owner === 0);
-      this.frequency = existing?.frequency || 'once';
-      this.amount = existing ? existing.amount : Math.max(1, Math.min(this.amount, source.troops - 1));
+      this.frequency = existing?.frequency || (cell.owner === 0 ? 'repeat' : 'once');
+      this.amount = existing ? existing.amount : cell.owner === 0 ? 99 : Math.max(1, Math.min(this.amount, source.troops - 1));
     } else if (cell.owner === 0) {
       this.selected = id; this.target = null; this.frequency = 'once';
       this.amount = Math.max(1, Math.floor((cell.troops - 1) / 2));
@@ -188,8 +188,11 @@ export class GameApp {
     if (this.desktop) text(ctx, 'H E X W A R  /  单人战役', 164, y + 25, 10, C.dim);
     const sx = this.w - 48;
     this.button('rules', '?', sx - 118, y + 7, 34, 34, () => { this.modal = 'rules'; });
-    this.button('new', '新战役', sx - 76, y + 7, 68, 34, () => { this.setup = { size: this.state.config.size, enemies: this.state.config.enemies }; this.modal = 'setup'; });
-    this.button('save', '', sx, y + 7, 36, 34, () => { this.modal = 'cloud'; if (this.p.cloud) this.readCloud(); });
+    this.button('new', '新战役', sx - 76, y + 7, 68, 34, () => {
+      const { size, enemies, shape, difficulty } = this.state.config;
+      this.setup = { size, enemies, shape, difficulty }; this.modal = 'setup';
+    });
+    this.button('save', '', sx, y + 7, 36, 34, () => { this.modal = 'cloud'; this.cloudExpanded = false; });
     this.buttons[this.buttons.length - 1].label = '存档';
     // Draw a portable save icon instead of relying on emoji font support in WeChat.
     box(ctx, sx + 9, y + 15, 18, 18, null, C.mint, 2);
@@ -229,10 +232,13 @@ export class GameApp {
     this.inspector(this.w - infoW - 8, y, infoW, h, false);
   }
   drawMap(x, y, w, h) {
-    const ctx = this.ctx, radius = SIZES[this.state.config.size].radius;
+    const ctx = this.ctx;
     const availableH = h - 46;
-    const unit = Math.max(5, Math.min((w - 24) / (Math.sqrt(3) * (2 * radius + 1)), availableH / (3 * radius + 2)));
-    this.map = { x, y, w, h, radius: unit * this.zoom, cx: x + w / 2 + this.pan.x, cy: y + 35 + availableH / 2 + this.pan.y };
+    const positions = Object.values(this.state.cells).map(c => toPixel(c.q, c.r, 1));
+    const minX = Math.min(...positions.map(p => p.x)), maxX = Math.max(...positions.map(p => p.x));
+    const minY = Math.min(...positions.map(p => p.y)), maxY = Math.max(...positions.map(p => p.y));
+    const unit = Math.max(5, Math.min((w - 24) / (maxX - minX + Math.sqrt(3)), availableH / (maxY - minY + 2)));
+    this.map = { x, y, w, h, radius: unit * this.zoom, cx: x + w / 2 + this.pan.x - (minX + maxX) / 2 * unit * this.zoom, cy: y + 35 + availableH / 2 + this.pan.y - (minY + maxY) / 2 * unit * this.zoom };
     box(ctx, x, y, w, h, '#141e18', C.border, 12);
     ctx.save(); box(ctx, x + 1, y + 1, w - 2, h - 2, null, null, 12); ctx.clip();
     for (let gx = x + 18; gx < x + w; gx += 24) for (let gy = y + 16; gy < y + h; gy += 24) dot(ctx, gx, gy, 0.7, '#29362a');
@@ -270,7 +276,7 @@ export class GameApp {
       arrow(ctx, a.x + (b.x - a.x) * 0.35, a.y + (b.y - a.y) * 0.35, a.x + (b.x - a.x) * 0.77, a.y + (b.y - a.y) * 0.77, C.gold);
     }
     ctx.restore();
-    text(ctx, `${SIZES[this.state.config.size].label}战场 · ${Object.keys(this.state.cells).length} 格`, x + 12, y + 19, 11, C.muted, '500');
+    text(ctx, `${SHAPES[this.state.config.shape].label} · ${Object.keys(this.state.cells).length} 格`, x + 12, y + 19, 11, C.muted, '500');
     ctx.restore();
     const by = y + 5;
     this.button('zoom-out', '−', x + w - 104, by, 28, 27, () => this.changeZoom(-0.2));
@@ -349,21 +355,22 @@ export class GameApp {
   endButton(x, y, w, h) {
     this.button('end-turn', this.busy ? '统一结算中…' : '结束回合  →', x, y, w, h, () => this.endTurn(), 'normal', this.busy || this.cloudBusy || this.state.phase !== 'playing');
   }
-  async readCloud() {
+  async readCloud({ silent = false } = {}) {
     if (!this.p.cloud || this.cloudBusy) return;
     this.cloudBusy = true; this.cloudError = ''; this.render();
     try { this.cloudRecord = await this.p.cloud.read(); }
-    catch (error) { this.cloudError = error.message; this.cloudRecord = null; }
+    catch (error) { this.cloudError = silent ? '' : '本机进度已保留，可稍后重试云存档。'; this.cloudRecord = null; }
     finally { this.cloudBusy = false; this.render(); }
   }
-  async writeCloud() {
-    if (this.busy || this.cloudBusy || !this.cloudRecord) return;
+  async writeCloud({ silent = false } = {}) {
+    if (!this.p.cloud || this.busy || this.cloudBusy || !this.cloudRecord) return;
+    this.save();
     this.cloudBusy = true; this.render();
     const state = JSON.parse(serialize(this.state));
     try {
       const result = await this.p.cloud.write(state, this.cloudRecord.revision);
-      this.cloudRecord = { ...result, state }; this.cloudError = ''; this.notify('当前战役已备份到云端。');
-    } catch (error) { this.cloudError = error.message; this.cloudRecord = null; }
+      this.cloudRecord = { ...result, state }; this.cloudError = ''; if (!silent) this.notify('当前战役已备份到云端。');
+    } catch (error) { this.cloudError = silent ? '' : '本机进度已保留，可稍后重试云存档。'; this.cloudRecord = null; }
     finally { this.cloudBusy = false; this.render(); }
   }
   restoreCloud() {
@@ -380,9 +387,9 @@ export class GameApp {
   cloudPanel(x, y, w, compact) {
     const ctx = this.ctx, record = this.cloudRecord;
     text(ctx, this.cloudBusy ? '正在连接云存档…' : record?.state ? `云端战役 · 第 ${record.state.round} 轮` : record ? '云端暂无备份' : '微信云存档', x, y, 12, C.mint, '600');
-    if (this.cloudError) {
-      wrap(ctx, this.cloudError, x, y + 25, w, 11, C.muted, 18);
-      this.button('cloud-retry', '重新连接', x, y + (compact ? 79 : 110), w, 34, () => this.readCloud(), 'normal', this.cloudBusy);
+    if (!record && !this.cloudBusy) {
+      if (this.cloudError) wrap(ctx, this.cloudError, x, y + 25, w, 11, C.muted, 18);
+      this.button('cloud-retry', '检查云端', x, y + (compact ? 62 : 90), w, 34, () => this.readCloud({ silent: true }));
       return;
     }
     wrap(ctx, '备份会更新云端；读取会替换本机战役。', x, y + 26, w, 10, C.muted, 18);
@@ -422,7 +429,7 @@ export class GameApp {
     const ctx = this.ctx, setup = this.modal === 'setup', rules = this.modal === 'rules', cloud = this.modal === 'cloud', orders = this.modal === 'orders';
     ctx.fillStyle = '#050c09dc'; ctx.fillRect(0, 0, this.w, this.h);
     const available = this.h - this.top - this.bottom - 20;
-    const w = Math.min(this.w - 28, setup ? 520 : 540), h = Math.min(available, setup ? 542 : rules ? 570 : orders ? 500 : 420);
+    const w = Math.min(this.w - 28, setup ? 520 : 540), h = Math.min(available, setup ? 610 : rules ? 570 : orders ? 500 : 420);
     const x = (this.w - w) / 2, y = this.top + (this.h - this.top - this.bottom - h) / 2;
     box(ctx, x, y, w, h, '#1a261e', '#465940', 18);
     const tight = h < 490, pad = w < 400 ? 22 : 32;
@@ -431,37 +438,34 @@ export class GameApp {
     if (cloud) {
       text(ctx, '存档', ix, y + 43, 23, C.ink, '600');
       text(ctx, '本机每步自动保存', ix, y + 77, 12, C.muted);
-      if (this.p.cloud) this.cloudPanel(ix, y + 116, iw, h < 380);
+      if (this.p.cloud && this.cloudExpanded) this.cloudPanel(ix, y + 116, iw, h < 380);
       else {
         text(ctx, '本机进度已保留', ix, y + 127, 14, C.mint, '600');
-        wrap(ctx, '刷新页面后可以继续当前战役。微信小游戏内可使用微信账号备份和读取云存档。', ix, y + 164, iw, 12, C.muted, 24);
+        wrap(ctx, '指令和战役进度默认保存在本机。退出后再次进入，可以继续当前战役。', ix, y + 164, iw, 12, C.muted, 24);
+        if (this.p.cloud) this.button('cloud-open', '云存档（可选）', ix, y + h - 74, iw, 36, () => { this.cloudExpanded = true; this.readCloud({ silent: true }); });
       }
     } else if (orders) {
       text(ctx, '本回合指令', ix, y + 43, 23, C.ink, '600');
       text(ctx, '本回合优先 · 每回合使用剩余兵力', ix, y + 76, w < 400 ? 10 : 12, C.muted);
       this.routesPanel(ix, y + 107, iw, h - 124);
     } else if (setup) {
-      const scale = Math.min(1, (h - 90) / 445);
-      const sy = n => y + 24 + n * scale;
-      if (this.logo?.width) ctx.drawImage(this.logo, ix - 4, sy(0), 52 * scale, 52 * scale);
-      text(ctx, '一场新的征途', ix, sy(85), 27 * Math.max(0.8, scale), C.ink, '600');
-      text(ctx, '从一格领地开始，改写整个战场。', ix, sy(118), 12, C.muted);
-      text(ctx, '01  选择战场规模', ix, sy(164), 12, C.ink, '600');
+      const compact = h < 530;
+      text(ctx, '战役准备', ix, y + 39, 23, C.ink, '600');
+      const start = y + 82, stride = (h - 178) / 4;
+      const choiceH = Math.max(27, Math.min(42, stride - 28));
+      text(ctx, '01  战场规模', ix, start, 12, C.ink, '600');
       const cw = (iw - 16) / 3;
-      Object.entries(SIZES).forEach(([id, size], i) => {
-        const cx = ix + i * (cw + 8), cy = sy(186), ch = 94 * scale;
-        const active = this.setup.size === id;
-        box(ctx, cx, cy, cw, ch, active ? '#2b4431' : '#202e24', active ? C.mint : C.border, 9);
-        text(ctx, size.label, cx + cw / 2, cy + ch * 0.25, 16, active ? C.mint : C.ink, '600', 'center');
-        text(ctx, `${size.cells} 格`, cx + cw / 2, cy + ch * 0.54, 12, C.muted, '400', 'center');
-        if (scale > 0.75) text(ctx, size.duration, cx + cw / 2, cy + ch * 0.79, 10, C.dim, '400', 'center');
-        this.buttons.push({ id: `size-${id}`, label: `${size.label}地图 ${size.cells} 格`, x: cx, y: cy, w: cw, h: ch, action: () => { this.setup.size = id; } });
-      });
-      text(ctx, '02  敌对势力数量', ix, sy(313), 12, C.ink, '600');
+      Object.entries(SIZES).forEach(([id, size], i) => this.button(`size-${id}`, size.label, ix + i * (cw + 8), start + 20, cw, choiceH, () => { this.setup.size = id; }, this.setup.size === id ? 'active' : 'normal'));
+      text(ctx, '02  战场形状', ix, start + stride, 12, C.ink, '600');
+      const sw = (iw - 8) / 2;
+      Object.entries(SHAPES).forEach(([id, shape], i) => this.button(`shape-${id}`, shape.label, ix + i * (sw + 8), start + stride + 20, sw, choiceH, () => { this.setup.shape = id; }, this.setup.shape === id ? 'active' : 'normal'));
+      text(ctx, '03  敌对势力数量', ix, start + stride * 2, 12, C.ink, '600');
       const nw = (iw - 32) / 5;
-      for (let n = 1; n <= 5; n++) this.button(`enemies-${n}`, String(n), ix + (n - 1) * (nw + 8), sy(335), nw, Math.max(29, 39 * scale), () => { this.setup.enemies = n; }, this.setup.enemies === n ? 'active' : 'normal');
-      text(ctx, '单人模式  ·  随机地图  ·  每轮领地兵力 +1', ix, sy(406), w < 400 ? 10 : 11, C.muted);
-      this.button('start-game', '开启战役  →', ix, y + h - 71, iw, 46, () => this.newGame(), 'primary');
+      for (let n = 1; n <= 5; n++) this.button(`enemies-${n}`, String(n), ix + (n - 1) * (nw + 8), start + stride * 2 + 20, nw, choiceH, () => { this.setup.enemies = n; }, this.setup.enemies === n ? 'active' : 'normal');
+      text(ctx, '04  敌军智能', ix, start + stride * 3, 12, C.ink, '600');
+      Object.entries(DIFFICULTIES).forEach(([id, difficulty], i) => this.button(`difficulty-${id}`, difficulty.label, ix + i * (cw + 8), start + stride * 3 + 20, cw, choiceH, () => { this.setup.difficulty = id; }, this.setup.difficulty === id ? 'active' : 'normal'));
+      text(ctx, (compact ? '' : '随机空洞与出生点 · ') + DIFFICULTIES[this.setup.difficulty].strategy, ix, y + h - 74, 11, C.muted);
+      this.button('start-game', '开启战役  →', ix, y + h - 57, iw, 40, () => this.newGame(), 'primary');
     } else if (rules) {
       text(ctx, '指挥官手册', ix, y + 46, 25, C.ink, '600');
       text(ctx, '少一点规则，多一点谋略。', ix, y + 78, 12, C.muted);
