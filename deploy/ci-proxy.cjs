@@ -6,7 +6,7 @@ const server = http.createServer((_req, res) => { res.writeHead(405); res.end();
 server.on('connect', (req, client, head) => {
   const match = /^([a-zA-Z0-9.-]+):443$/.exec(req.url || '');
   const host = match?.[1].toLowerCase();
-  if (!host || !(host === 'servicewechat.com' || host.endsWith('.servicewechat.com') || host === 'api.weixin.qq.com')) {
+  if (!host || !(host === 'servicewechat.com' || host.endsWith('.servicewechat.com') || host === 'api.weixin.qq.com' || host === 'game.weixin.qq.com')) {
     client.end('HTTP/1.1 403 Forbidden\r\n\r\n'); return;
   }
   const upstream = net.connect({ host, port: 443 });

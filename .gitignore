@@ -5,6 +5,7 @@ project.private.config.json
 .DS_Store
 *.log
 wechat-ci.local.json
+id_rsa.conf
 private.*.key
 .env
 .env.*

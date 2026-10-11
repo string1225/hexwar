@@ -10,6 +10,8 @@
     "test": "node --test tests/*.test.js",
     "check": "npm run test && npm run build",
     "wechat:check": "node scripts/wechat-ci.cjs check",
+    "wechat:protect:setup": "node scripts/wechat-protect.mjs setup",
+    "wechat:protect": "npm run build && node scripts/wechat-via-ssh.mjs protect",
     "wechat:preview": "npm run build && node scripts/wechat-via-ssh.mjs preview",
     "wechat:upload": "npm run build && node scripts/wechat-via-ssh.mjs upload",
     "server": "node server/index.js",
@@ -17,6 +19,7 @@
   },
   "devDependencies": {
     "esbuild": "^0.25.0",
+    "minigame-code-fortify-cli": "0.1.8",
     "miniprogram-ci": "2.1.31"
   },
   "engines": {

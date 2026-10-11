@@ -24,16 +24,22 @@ function configuration(base = root, env = process.env) {
   return { appid, privateKeyPath, robot, qrcodeOutputDest, version, desc: env.WECHAT_CI_DESC || local.desc || `HEXWAR ${version}` };
 }
 
+const protectedSettings = { es6: false, minify: false, minifyJS: false };
+const protectedIgnores = ['**/*.map', '**/*.bak', 'protection-manifest.json', 'code.fortify.config.json', '**/id_rsa.conf', '**/*.key', '**/*.local.json', '**/.env*'];
+
 async function run(command = process.argv[2] || 'check') {
   if (!['check', 'preview', 'upload'].includes(command)) throw new Error('Use check, preview or upload.');
   const config = configuration();
   console.log(`[wechat-ci] ${config.appid} · version ${config.version} · robot ${config.robot}`);
   if (command === 'check') { console.log('[wechat-ci] local configuration and signing key are valid'); return; }
   if (!fs.existsSync(path.join(root, 'dist/wechat/game.js'))) throw new Error('Run npm run build before uploading.');
+  const { protectBuild, verifyProtectedBuild } = await import('./wechat-protect.mjs');
+  const manifest = await protectBuild();
+  await verifyProtectedBuild(manifest);
   const ci = require('miniprogram-ci');
   if (process.env.WECHAT_CI_PROXY) ci.proxy(process.env.WECHAT_CI_PROXY);
-  const project = new ci.Project({ appid: config.appid, type: 'miniGame', projectPath: root, privateKeyPath: config.privateKeyPath, ignores: ['node_modules/**/*', 'artifacts/**/*', 'server/**/*', '**/*.key', '**/*.local.json', '**/.env*'] });
-  const options = { project, desc: config.desc, robot: config.robot, setting: { es6: true, minify: true, minifyJS: true }, onProgressUpdate: update => { if (update.message) console.log(`[wechat-ci] ${update.message}`); } };
+  const project = new ci.Project({ appid: config.appid, type: 'miniGame', projectPath: manifest.outputDir, privateKeyPath: config.privateKeyPath, ignores: protectedIgnores });
+  const options = { project, desc: config.desc, robot: config.robot, setting: protectedSettings, onProgressUpdate: update => { if (update.message) console.log(`[wechat-ci] ${update.message}`); } };
   if (command === 'preview') {
     fs.mkdirSync(path.dirname(config.qrcodeOutputDest), { recursive: true });
     await ci.preview({ ...options, qrcodeFormat: 'image', qrcodeOutputDest: config.qrcodeOutputDest });
@@ -43,5 +49,5 @@ async function run(command = process.argv[2] || 'check') {
     console.log('[wechat-ci] development version uploaded (not submitted for review or published)');
   }
 }
-module.exports = { configuration, run };
+module.exports = { configuration, run, protectedSettings, protectedIgnores };
 if (require.main === module) run().then(() => process.exit(0), error => { console.error(`[wechat-ci] ${error.message}`); process.exit(1); });

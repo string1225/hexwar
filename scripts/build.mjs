@@ -8,7 +8,7 @@ await mkdir(path.join(root, 'dist/web'), { recursive: true });
 await mkdir(path.join(root, 'dist/wechat'), { recursive: true });
 await Promise.all([
   build({ absWorkingDir: root, entryPoints: ['src/platform/web.js'], bundle: true, format: 'esm', target: 'es2019', minify: true, outfile: 'dist/web/game.js' }),
-  build({ absWorkingDir: root, entryPoints: ['src/platform/wechat.js'], bundle: true, format: 'iife', target: 'es2019', minify: true, outfile: 'dist/wechat/game.js' }),
+  build({ absWorkingDir: root, entryPoints: ['src/platform/wechat.js'], bundle: true, format: 'iife', target: 'es2019', minify: true, sourcemap: 'external', outfile: 'dist/wechat/game.js' }),
   cp(path.join(root, 'assets'), path.join(root, 'dist/web/assets'), { recursive: true }),
   cp(path.join(root, 'assets'), path.join(root, 'dist/wechat/assets'), { recursive: true }),
   cp(path.join(root, 'style.css'), path.join(root, 'dist/web/style.css')),

@@ -4,7 +4,7 @@ import path from 'node:path';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const command = process.argv[2];
-if (!['preview', 'upload'].includes(command)) throw new Error('Use preview or upload.');
+if (!['preview', 'upload', 'protect'].includes(command)) throw new Error('Use preview, upload or protect.');
 const host = process.env.HEXWAR_SSH_HOST || 'aliyun-139';
 if (!/^[a-zA-Z0-9_.@-]+$/.test(host)) throw new Error('Invalid SSH host.');
 const proxyFile = '/home/junte/.cache/hexwar-ci-proxy.cjs';
@@ -23,6 +23,7 @@ try {
     ssh.stdout.on('data', data => { output += data; if (output.includes('HEXWAR_CI_PROXY_READY')) { clearTimeout(timer); resolve(); } });
   });
   console.log('[wechat-ci] Upload traffic uses the 139 server through SSH; signing key stays local.');
-  worker = spawn(process.execPath, [path.join(root, 'scripts/wechat-ci.cjs'), command], { cwd: root, stdio: 'inherit', windowsHide: true, env: { ...process.env, WECHAT_CI_PROXY: 'http://127.0.0.1:18941' } });
+  const workerScript = command === 'protect' ? 'scripts/wechat-protect.mjs' : 'scripts/wechat-ci.cjs';
+  worker = spawn(process.execPath, [path.join(root, workerScript), command], { cwd: root, stdio: 'inherit', windowsHide: true, env: { ...process.env, WECHAT_CI_PROXY: 'http://127.0.0.1:18941' } });
   process.exitCode = await new Promise((resolve, reject) => { worker.once('exit', code => resolve(code ?? 1)); worker.once('error', reject); });
 } finally { cleanup(); }

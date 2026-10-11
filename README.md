@@ -41,11 +41,17 @@ npm run check # 测试 + 构建
 
 ```sh
 npm run wechat:check    # 校验 AppID、RSA 上传密钥和机器人编号
-npm run wechat:preview  # 构建，生成 artifacts/wechat-preview.jpg 扫码预览
-npm run wechat:upload   # 构建，上传微信开发版本；不自动提审或正式发布
+npm run wechat:protect:setup # 准备专用加固密钥，输出待登记公钥路径
+npm run wechat:protect  # 构建、微信官方混淆 / 水印、加固包启动检查
+npm run wechat:preview  # 构建并加固，生成 artifacts/wechat-preview.jpg
+npm run wechat:upload   # 构建并加固，上传开发版本；不自动提审或发布
 ```
 
 上述流程通过 `miniprogram-ci` 调用微信平台，不依赖开发工具 CLI 服务端口。预览和上传经 SSH 使用 139 的网络出口，上传密钥留在本机；若开启此 AppID 的「小程序代码上传」IP 白名单，需加入 `139.224.12.141`。这与服务器域名白名单是两项独立设置。App Secret 仅用于服务器。
+
+微信预览、上传已默认接入 `minigame-code-fortify-cli@0.1.8` 的等级 2 混淆和水印。首次需要由小游戏管理员将 `wechat:protect:setup` 输出的 `public_key.pem` 全文登记到微信后台「开发支持 → 研发工具箱 → 密钥管理」。私钥配置默认保存在工程外的本机用户目录 `.hexwar-protection/<AppID>/id_rsa.conf`，可用 `WECHAT_FORTIFY_SECRET_CONFIG` 指向其他工程外路径；它与代码上传私钥是两套凭据，不上传或提交 Git。
+
+加固失败、产物不完整或启动检查失败会停止发布，不回退普通包。发布目录是 `dist/wechat-protected/<唯一编号>`，不再压缩或转译加固 JS。原始与加固 JS / sourcemap 保留在 `artifacts/wechat-protection`，sourcemap 不上传。实际启用状态见 [验收记录](docs/VALIDATION.md)。
 
 ## 139 服务器
 

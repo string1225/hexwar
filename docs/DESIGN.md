@@ -87,7 +87,7 @@ A→B 和 B→A 的敌对部队先以出征数量交战，双方相同的胜率�
 
 ## 游戏深度保护调研（2026-10-11）
 
-结论：微信小游戏的 JavaScript 构建产物可以接入该工具，建议采用 CLI 作为可选发布步骤，与现有 `miniprogram-ci` 流程衔接。此次仅调研，未安装运行加固服务、登记公钥或替换发布包；1.5.0 仍使用正常构建产物。
+2026-10-11 调研后，已于 2026-10-12 按用户要求实现默认 CLI 加固流程。微信预览和上传先调用等级 2 混淆 / 水印服务，再验证加固产物并发布；失败则停止。实际微信接口返回 `-10000404`（没有配置公钥），因此目前接入已完成，真实加固包尚未生成或上传，待小游戏管理员登记专用公钥。
 
 依据为用户提供的微信官方文档节选，以及从 npm 下载但未执行的 `minigame-code-fortify-cli@0.1.8` 发布包。`npm view` 核实当日版本为 0.1.8，示例 package.json 中的 ^1.0.1 不宜直接照抄。官方网页抓取未成功，因此账号实际授权、额度和计费状态仍需在微信后台确认。参考：[微信保护文档](https://developers.weixin.qq.com/minigame/dev/devtools/codeprotect.html)、[npm 发布包](https://www.npmjs.com/package/minigame-code-fortify-cli)。
 
@@ -103,9 +103,9 @@ A→B 和 B→A 的敌对部队先以出征数量交战，双方相同的胜率�
 
 `测试 → esbuild 微信构建 → CLI 混淆 / 水印 → 加固包启动与真机验证 → 预览 / 上传`
 
-以 `dist/wechat` 为输入，使用独立的 `dist/wechat-protected` 输出。源代码与普通调试包保留。上传阶段必须明确选择加固输出，避免 `wechat:upload` 的自动重建覆盖它。当前 CI 开启 `es6`、`minify`、`minifyJS`；加固产物的上传路径应关闭再次转译、压缩等 JS 改写，遵循文档的“不可更改已加固的代码”要求。加固失败时应让该发布步骤失败，不能声称已加固后却上传普通产物。
+已实现：以 `dist/wechat` 为输入，为每次请求生成空的 `dist/wechat-protected/<唯一编号>` 输出目录。源代码与普通调试包保留。只将该次通过验证的加固目录传给 CI，关闭 `es6`、`minify`、`minifyJS`，避免重建覆盖和上传后的 JS 改写。SDK 返回 false、缺少 JS / sourcemap、输出代码未改变、微信启动失败时均停止，不回退普通包；发布前再核对版本及源码、配置、输出 SHA-256。测试中的模拟服务仅验证流程，不能作为实际加固成功的证据。
 
-项目中的配置示意（尚未启用）：
+项目已使用以下 `wechat-protect.config.json` 配置：
 
 ```json
 {
@@ -119,7 +119,7 @@ A→B 和 B→A 的敌对部队先以出征数量交战，双方相同的胜率�
 
 先用等级 2 对比包体、启动时间、地图拖动、指令操作及长局结算，通过真机验收后再评估等级 3。文档建议无特殊要求时选 3，这里先选 2 是针对当前发布流程尚未验证加固产物的工程建议。
 
-CLI 的 0.1.8 类型声明支持 `protect(workDir, outputDir, options)`，第三个参数可提供 `secretConfigPath`、`protectConfigPath`、`networkOptions`（代理和分钟超时）及 `maxBatchSizeMB`，返回 `Promise<boolean>`。这与我们现有 SSH 出口代理具备接入条件，但尚未实际请求加固服务验证网络。
+CLI 的 0.1.8 类型声明支持 `protect(workDir, outputDir, options)`，第三个参数可提供 `secretConfigPath`、`protectConfigPath`、`networkOptions`（代理和分钟超时）及 `maxBatchSizeMB`，返回 `Promise<boolean>`。已通过现有 SSH 代理实际请求 `game.weixin.qq.com` 加固接口，微信返回未登记公钥的具体错误；网络可达，授权尚待完成。
 
 ### 凭据与排错
 

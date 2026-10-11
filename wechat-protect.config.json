@@ -1,0 +1,10 @@
+{
+  "watermark": {
+    "name": "水印保护",
+    "files": ["game.js"]
+  },
+  "obfuscation": {
+    "name": "代码混淆",
+    "tasks": [{ "level": 2, "files": ["game.js"] }]
+  }
+}

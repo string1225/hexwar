@@ -41,12 +41,17 @@ node scripts/provision-server.mjs /absolute/path/to/server.env
 npm ci
 npm run check
 npm run wechat:check
+npm run wechat:protect:setup
 npm run deploy
 npm run wechat:upload
 npm run wechat:preview
 ```
 
 `deploy` 仅打包 Web 构建、服务代码、共享规则和部署模板，不向服务器安装开发依赖。创建版本目录，保留旧版本；备份 Nginx / systemd 配置，校验 `nginx -t`，重启独立服务并检查回环健康状态后 reload Nginx。现有站点和 `/meeting/` 路由保留。
+
+首次执行 `wechat:protect:setup` 后，小游戏管理员需要将输出的 `public_key.pem` 全文登记到微信后台「开发支持 → 研发工具箱 → 密钥管理」。默认私钥配置位于工程外的用户目录 `.hexwar-protection/<AppID>/id_rsa.conf`，也可通过 `WECHAT_FORTIFY_SECRET_CONFIG` 指定已有配置。脚本不会覆盖已有专用私钥。临时 SSH 中继额外允许微信加固服务 `game.weixin.qq.com:443`，仍仅监听回环，不增加公网端口。
+
+`wechat:preview` 和 `wechat:upload` 每次都先运行官方等级 2 混淆与水印，校验输出 JS、sourcemap 和微信环境启动 / 本机存档，随后只上传当次验证过的独立加固目录。SDK 失败、缺少文件、代码未改写、代码无法启动或源码 / 配置 / 产物哈希变化时均停止。上传关闭 `es6`、`minify`、`minifyJS`；sourcemap、备份、清单和密钥配置均不上传。原始与加固 JS / 映射保留于 `artifacts/wechat-protection/<版本>/<编号>`。启动模拟不能替代真机验收。
 
 Nginx 安装脚本针对当前服务器的 `sunny-string.conf` HTTPS include 位置进行一次性接入。如果配置结构已改变，脚本会报错停止，需先查看服务器配置再调整。修改 SSH 目标可使用 `HEXWAR_SSH_HOST`，当前部署目录按 `junte` 用户设计。
 
