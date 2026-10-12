@@ -50,12 +50,12 @@ test('moves validate turn, adjacency, ownership and integer troops without mutat
   assert.equal(result.orders.length, 1); assert.equal(applyCommand(result, base).orders.length, 1);
   assert.equal(finishRound(result).cells[a.id].troops, 15);
 });
-test('friendly move conserves troops and reserves one garrison', () => {
-  const { state, a, b } = scenario(); b.owner = 0;
+test('friendly transfers conserve movement, retain a garrison, and grow the resulting armies', () => {
+  const { state, a, b } = scenario(); b.owner = 0; b.troops = 1;
   const sum = a.troops + b.troops;
   const next = finishRound(command(state, { type: 'MOVE', from: a.id, to: b.id, amount: 17 }));
   assert.equal(next.cells[a.id].troops, 2);
-  assert.equal(next.cells[a.id].troops + next.cells[b.id].troops, sum + 2);
+  assert.equal(next.cells[a.id].troops + next.cells[b.id].troops, sum + 3); // 1 soldier grows by 1; 18 by 2.
 });
 test('probability targets 95% at 3:1, 50% at parity and complementary reverse odds', () => {
   assert.ok(Math.abs(winChance(15, 5) - 0.95) < 1e-12); assert.equal(winChance(5, 5), 0.5);
@@ -72,8 +72,10 @@ test('combat losses fluctuate slightly around half the losing army, with a survi
     const { state, a, b } = scenario(); b.troops = 10; a.troops = 31; state.rng = seed;
     const next = finishRound(command(state, { type: 'MOVE', from: a.id, to: b.id, amount: 30 }));
     if (next.cells[b.id].owner === 0) {
-      const troops = next.cells[b.id].troops - 1; // end-of-round supply
+      const entry = next.logs.find(l => l.type === 'capture' && l.text.startsWith(b.id + ' '));
+      const troops = Number(entry.text.match(/剩余 (\d+) 兵/)[1]); // Before proportional end-of-round growth.
       assert.ok([24, 25, 26].includes(troops)); remaining.add(troops);
+      assert.ok(next.cells[b.id].troops >= troops + Math.round(troops * 0.09) && next.cells[b.id].troops <= troops + Math.round(troops * 0.11));
     } else assert.ok(next.cells[b.id].troops >= 1 && next.cells[b.id].troops <= 10);
   }
   assert.deepEqual([...remaining].sort(), [24, 25, 26]);
@@ -83,7 +85,7 @@ test('growth happens exactly once after every living faction takes a turn; neutr
   const s = start(), initial = serialize(s), home = owned(s), neutral = Object.values(s.cells).find(c => c.owner === null);
   const ai = command(s, { type: 'END_TURN' }); assert.equal(ai.round, 1); assert.equal(ai.cells[home.id].troops, 18);
   const next = finishRound(s); assert.equal(next.round, 2); assert.equal(next.current, 0);
-  assert.equal(next.cells[home.id].troops, 19); assert.equal(next.cells[neutral.id].troops, neutral.troops);
+  assert.equal(next.cells[home.id].troops, 20); assert.equal(next.cells[neutral.id].troops, neutral.troops);
   assert.equal(serialize(s), initial);
 });
 test('recurring orders use the end-turn snapshot before growth and cannot relay arriving troops within a round', () => {

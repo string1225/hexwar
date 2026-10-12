@@ -339,7 +339,9 @@ export class GameApp {
     text(this.ctx, this.amount, x + 54, y + 17, 18, C.ink, '600', 'center', true);
     this.button('amount-plus', '+', x + 80, y, 28, 34, () => { this.amount = Math.min(max, this.amount + 1); }, 'normal', !canControl || this.amount >= max);
     const fw = (w - 126) / 3;
-    [0.25, 0.5, 1].forEach((v, i) => this.button('amount-' + i, ['1/4', '1/2', '全部'][i], x + 114 + i * (fw + 6), y, fw, 34, () => { this.amount = Math.min(max, Math.max(1, Math.floor(budget * v))); }, 'normal', !canControl || budget === 0));
+    [0.25, 0.5, 1].forEach((v, i) => this.button('amount-' + i, ['1/4', '1/2', '最大'][i], x + 114 + i * (fw + 6), y, fw, 34, () => {
+      this.amount = i === 2 ? max : Math.min(max, Math.max(1, Math.floor(budget * v)));
+    }, 'normal', !canControl || (i === 2 ? max === 0 : budget === 0)));
   }
   actionButton(x, y, w, h, canControl, target) {
     const source = this.state.cells[this.selected], repeat = this.frequency === 'repeat';
@@ -471,7 +473,7 @@ export class GameApp {
       text(ctx, '少一点规则，多一点谋略。', ix, y + 78, 12, C.muted);
       const pages = [
         [ ['01', '规划行军', '点己方领地，再点相邻目标，设置兵力与方向。设定后下一次点格子会直接切换选中。所有计划在结束回合后一起执行。'], ['02', '本回合与每回合', '「本回合」执行一次后清除；相邻友军可选「每回合」持续调兵。同一起点可设多个方向，本回合指令列表可查看和修改。'], ['03', '合兵与遭遇', '同势力抵达同一格的部队合兵作战。双方沿同一路线互攻，先在途中交战，胜方幸存部队继续攻城。败方全灭，胜方损耗会小幅浮动。'] ],
-        [ ['04', '结算与补给', '全部势力锁定后一起结算。每格留 1 兵，本回合指令合计不能超过余兵；先满足本回合，再以剩余兵力按比例执行每回合指令。援军本轮不再出发，整轮后领地各加 1 兵。'], ['05', '管理指令', '同一起点与目标只有一条指令。数量和频率没有改动时，更新按钮置灰；调整后亮起，保存后再次置灰。持续调兵任一端失守后取消。'], ['06', '赢下这片疆土', '整轮全部战斗结束后，消灭所有敌对势力的彩色领地即可获胜。出发地失守不影响已出发的部队。每步自动保存，右上角保存图标可查看云存档。'] ],
+        [ ['04', '结算与补给', '各方锁定后统一结算。每格留 1 兵，先满足本回合指令，再用余兵执行每回合指令；援军本轮不再出发。整轮后按驻军人数增长，基准为十分之一，并小幅上下浮动，至少增长 1 兵。'], ['05', '管理指令', '同一起点与目标只有一条指令。数量和频率没有改动时，更新按钮置灰；调整后亮起，保存后再次置灰。持续调兵任一端失守后取消。'], ['06', '赢下这片疆土', '整轮全部战斗结束后，消灭所有敌对势力的彩色领地即可获胜。出发地失守不影响已出发的部队。每步自动保存，右上角保存图标可查看云存档。'] ],
       ];
       const perPage = h < 430 ? 1 : w < 420 ? 2 : 3;
       const entries = pages.flat(), pageCount = Math.ceil(entries.length / perPage);

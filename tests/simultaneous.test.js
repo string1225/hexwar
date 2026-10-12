@@ -119,7 +119,7 @@ test('capacity-limited friendly transfers leave rejected troops home and propaga
   Object.assign(state.cells['0,0'], { owner: 0, troops: 9998 });
   Object.assign(state.cells['1,0'], { owner: 0, troops: 9999 });
   const next = playRound(state, { 0: [plan('-1,0', '0,0', 9), plan('0,0', '1,0', 9)] });
-  assert.equal(next.cells['-1,0'].troops, 20); // Only one departs, then supply +1.
+  assert.equal(next.cells['-1,0'].troops, 21); // Only one departs; the remaining 19 grow by 2.
   assert.equal(next.cells['0,0'].troops, 9999); assert.equal(next.cells['1,0'].troops, 9999);
   assert.ok(restore(serialize(next)));
 });

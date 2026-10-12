@@ -132,7 +132,8 @@ test('manual sliders and shortcuts respect shared budget, editing credits, and z
   app.chooseCell(home.id); app.chooseCell(c.id); click(app, 'frequency-once'); assert.equal(app.amount, 0);
   for (const id of ['amount-minus', 'amount-plus', 'amount-0', 'amount-1', 'amount-2', 'dispatch']) assert.ok(app.buttons.find(b => b.id === id).disabled, id);
   assert.ok(app.ctx.drawn.includes('本回合额度已用完'));
-  click(app, 'frequency-repeat'); assert.equal(app.amount, 1); click(app, 'dispatch');
+  click(app, 'frequency-repeat'); assert.equal(app.amount, 1);
+  click(app, 'amount-2'); assert.equal(app.amount, 99); click(app, 'dispatch');
   click(app, 'orders'); click(app, `edit-${home.id}>${a.id}`);
   assert.equal(app.amount, 6); assert.ok(app.buttons.find(b => b.id === 'dispatch').disabled);
   assert.ok(app.buttons.find(b => b.id === 'amount-plus').disabled);
@@ -206,6 +207,8 @@ test('new friendly directions default to recurring 99, existing plans keep their
   const p = platform(390, 844, serialize(state)), app = new GameApp(p);
   app.chooseCell(friend.id); assert.equal(app.frequency, 'repeat'); assert.equal(app.amount, 99);
   click(app, 'dispatch'); assert.equal(app.state.orders[0].amount, 99); assert.equal(app.state.cells[home.id].troops, 3);
+  click(app, 'amount-1'); assert.equal(app.amount, 1);
+  click(app, 'amount-2'); assert.equal(app.amount, 99);
   click(app, 'amount-1'); click(app, 'dispatch'); assert.equal(app.state.orders[0].amount, 1);
   app.chooseCell(home.id); app.chooseCell(friend.id); assert.equal(app.amount, 1); assert.equal(app.frequency, 'repeat');
   app.chooseCell(neutral.id); assert.equal(app.frequency, 'once'); assert.ok(app.amount <= 2);

@@ -18,6 +18,8 @@ export const FACTIONS = [
   { name: '银月部落', short: '银', color: '#c9cfca', fill: '#4a5352', dark: '#282e2c' },
 ];
 const MAX_TROOPS = 9999;
+export const GROWTH_RATE = 0.1;
+export const GROWTH_VARIATION = 0.1;
 const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 export class RuleError extends Error {}
 const requireRule = (ok, message) => { if (!ok) throw new RuleError(message); };
@@ -211,10 +213,19 @@ function resolveRound(state) {
   finishIfNeeded(state);
 }
 
+export function growthAmount(state, cell) {
+  if (cell.owner === null || cell.troops >= MAX_TROOPS) return 0;
+  // Location-specific streams preserve results under map/order reordering,
+  // without rerolling growth when the same saved round is resumed.
+  const rng = { rng: hash(`${state.rng}:${state.round}:growth:${cell.id}`) };
+  const multiplier = 1 - GROWTH_VARIATION + random(rng) * GROWTH_VARIATION * 2;
+  return Math.min(MAX_TROOPS - cell.troops, Math.max(1, Math.round(cell.troops * GROWTH_RATE * multiplier)));
+}
+
 function settleRound(state) {
   state.round++;
-  for (const cell of Object.values(state.cells)) if (cell.owner !== null) cell.troops = Math.min(MAX_TROOPS, cell.troops + 1);
-  addLog(state, `第 ${state.round} 轮：全境补给 +1。`, 'growth');
+  for (const cell of Object.values(state.cells)) cell.troops += growthAmount(state, cell);
+  addLog(state, `第 ${state.round} 轮：全境按驻军兵力增长，已完成补给。`, 'growth');
 }
 
 export function applyCommand(previous, command) {
